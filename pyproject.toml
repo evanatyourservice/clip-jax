@@ -17,6 +17,7 @@ dependencies = [
     "transformers",
     "aqtp",
     "wandb",
+    "psgd-jax,
 ]
 
 [project.optional-dependencies]

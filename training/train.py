@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from functools import partial
 from platform import python_version
-from pprint import pformat
+from pprint import pformat, pprint
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 import flax
@@ -38,6 +38,7 @@ from PIL import Image
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 from tqdm import tqdm
 from transformers import HfArgumentParser
+from psgd_jax.kron import scale_by_kron, precond_update_prob_schedule
 
 from clip_jax import CLIPModel, CLIPVisionModelForImageClassification
 from clip_jax.data import Dataset, logits_to_image, preprocess_batch
@@ -121,7 +122,7 @@ class TrainingArguments:
     learning_rate: float = field(default=5e-5, metadata={"help": "The initial learning rate."})
     optim: str = field(
         default="distributed_shampoo",
-        metadata={"help": ('The optimizer to use. Can be "distributed_shampoo" (default), "adam" or "adafactor"')},
+        metadata={"help": ('The optimizer to use. Can be "distributed_shampoo" (default), "kron", "adam" or "adafactor"')},
     )
     weight_decay: float = field(default=0.0, metadata={"help": "Weight decay applied to parameters."})
     beta1: float = field(
@@ -133,7 +134,7 @@ class TrainingArguments:
         metadata={"help": "Beta2 for for Adam & Distributed Shampoo."},
     )
     adam_epsilon: float = field(default=1e-8, metadata={"help": "Epsilon for AdamW optimizer."})
-    max_grad_norm: float = field(default=1.0, metadata={"help": "Max gradient norm for Adafactor."})
+    max_grad_norm: float = field(default=1.0, metadata={"help": "Max gradient norm for Adafactor and PSGD."})
     block_size_text: int = field(
         default=1024,
         metadata={"help": "Chunked size for large layers with Distributed Shampoo."},
@@ -542,6 +543,15 @@ def split_scanned_params(data):
     for k, v in split.items():
         split[k] = unflatten_dict(v)
     return split
+
+
+def scanned_params_bool(data):
+    """Get pytree of booleans indicating scanned layers"""
+    all_false = jax.tree.map(lambda _: False, data)
+    scanned_layers = flax.traverse_util.ModelParamTraversal(
+        lambda k, _: "layers" in k
+    ).update(lambda _: True, all_false)
+    return scanned_layers
 
 
 def unsplit_scanned_params(data):
@@ -1133,6 +1143,32 @@ def main():
                 optimizer[k].init_fn,
                 update_fn_vision if any(name in k for name in ["vision", "scanned_vision"]) else update_fn_text,
             )
+    
+    elif training_args.optim in ["psgd", "psgd_kron", "kron"]:
+        if isMaxtext:
+            raise NotImplementedError("PSGD not supported for MaxText")
+        # psgd kron handles scanned layers internally so we pass in a tree of booleans
+        # indicating which layers to scan
+        _opt = [
+            optax.clip_by_global_norm(training_args.max_grad_norm),
+            scale_by_kron(
+                b1=training_args.beta1,
+                weight_decay=training_args.weight_decay,
+                preconditioner_update_probability=precond_update_prob_schedule(
+                    min_prob=1 / training_args.preconditioning_compute_steps,
+                ),
+                max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
+                precision="float32",  # matmul precision
+                scanned_layers=scanned_params_bool(
+                    trainable_params(logical_params, training_args)
+                ),
+            )
+        ]
+        if training_args.weight_decay > 0:
+            _opt.append(optax.add_decayed_weights(training_args.weight_decay))
+        _opt.append(optax.scale_by_learning_rate(learning_rate_fn))
+
+        optimizer = optax.chain(*_opt)
 
     elif training_args.optim == "adam":
         _opt = partial(
@@ -1243,8 +1279,88 @@ def main():
                     is_leaf=lambda x: isinstance(x, PartitionSpec),
                 )
         return opt_state_spec
+    
+    def get_opt_state_spec_psgd():
+        # a little different from above because psgd scans layers internally
+        temp_params = trainable_params(logical_params, training_args)
+        opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
+        params_specs = trainable_params(params_spec, training_args)
 
-    opt_state_spec = get_opt_state_spec()
+        # can just explicitly set everything, opt state should be tuple where one 
+        # entry is scale_by_kron.
+        psgd_idx = 0
+        for part in opt_state_shapes:
+            if isinstance(part, dict):  # kron state is a dictionary
+                if "Qs_preconditioners" in part:
+                    break
+            psgd_idx += 1
+
+        data_size = mesh.shape["data"]
+        model_size = mesh.shape["model"]
+
+        def shard_psgd_precond(Qs: list):
+            if training_args.shard_shampoo_across == "2d":
+                first_dim = "model" if training_args.mp_devices > training_args.dp_devices else "data"
+                last_dim = "data" if training_args.mp_devices > training_args.dp_devices else "model"
+            elif training_args.shard_shampoo_across == "model":
+                first_dim = "model"
+                last_dim = None
+            elif training_args.shard_shampoo_across == "data":
+                first_dim = "data"
+                last_dim = None
+            else:
+                raise ValueError(f"Invalid shard_shampoo_across: {training_args.shard_shampoo_across}")
+            precond_specs = []
+            for precond in Qs:
+                shape = precond.shape
+                new_sharding = [None for _ in shape]
+                if (
+                    len(shape) < 2
+                    or (len(shape) == 2 and shape[-2] != shape[-1])
+                ):
+                    # definitely a diagonal preconditioner, replicate
+                    precond_specs.append(PartitionSpec(*new_sharding))
+                    continue
+                # shard if bigger than 0.1 MB and divisible by sharding axis
+                if np.prod(shape) * precond.dtype.itemsize >= 0.1 * (2**20):
+                    if first_dim == "data" and shape[-2] % data_size == 0:
+                        new_sharding[-2] = first_dim
+                    elif first_dim == "model" and shape[-2] % model_size == 0:
+                        new_sharding[-2] = first_dim
+                    if last_dim == "data" and shape[-1] % data_size == 0:
+                        new_sharding[-1] = last_dim
+                    elif last_dim == "model" and shape[-1] % model_size == 0:
+                        new_sharding[-1] = last_dim
+                precond_specs.append(PartitionSpec(*new_sharding))
+            return precond_specs
+
+        psgd_specs = {}
+        for k, v in opt_state_shapes[psgd_idx].items():
+            if k == "count":
+                # count is not sharded
+                psgd_specs[k] = PartitionSpec(None)
+            elif k == "mu":
+                # momentum matches params
+                psgd_specs[k] = params_specs
+            elif k == "Qs_preconditioners":
+                # preconditioners (kept in lists)
+                precond_specs = jax.tree.map(
+                    shard_psgd_precond, v, is_leaf=lambda x: isinstance(x, list)
+                )
+                psgd_specs[k] = precond_specs
+
+        psgd_full_specs = [PartitionSpec(None)] * len(opt_state_shapes)
+        psgd_full_specs[psgd_idx] = psgd_specs
+        psgd_full_specs = tuple(psgd_full_specs)
+        if jax.process_index() == 0:
+            print("PSGD sharding specs:")
+            pprint(psgd_full_specs, width=100)
+        return psgd_full_specs
+
+    if training_args.optim in ["psgd", "psgd_kron", "kron"]:
+        opt_state_spec = get_opt_state_spec_psgd()
+    else:
+        opt_state_spec = get_opt_state_spec()
 
     # Initialize or restore optimizer state
     logger.info("Initializing optimizer state")
@@ -1256,6 +1372,8 @@ def main():
 
     @partial(pjit, in_shardings=(params_spec,), out_shardings=opt_state_spec)
     def init_opt_state(params):
+        if training_args.optim in ["psgd", "psgd_kron", "kron"]:
+            return optimizer.init(params)
         opt_state = {}
         for k, p in split_scanned_params(trainable_params(params, training_args)).items():
             init_fn = optimizer[k].init
@@ -1283,6 +1401,10 @@ def main():
 
     # Define update function
     def update_params(params, opt_state, grads):
+        if training_args.optim in ["psgd", "psgd_kron", "kron"]:
+            updates, new_opt_state = optimizer.update(grads, opt_state, params)
+            new_params = optax.apply_updates(params, updates)
+            return new_params, new_opt_state
         grads = split_scanned_params(trainable_params(grads, training_args))
         split_params = split_scanned_params(trainable_params(params, training_args))
         new_opt_state = {}
@@ -1531,6 +1653,14 @@ def main():
             opt_state_step = new_opt_state["text"][0] if "text" in new_opt_state else new_opt_state["vision"][0]
         elif training_args.optim == "adafactor":
             opt_state_step = new_opt_state["text"][2].count
+        elif training_args.optim in ["psgd", "psgd_kron", "kron"]:
+            psgd_idx = 0
+            for part in new_opt_state:
+                if isinstance(part, dict):  # kron state is a dictionary
+                    if "Qs_preconditioners" in part:
+                        break
+                psgd_idx += 1
+            opt_state_step = new_opt_state[psgd_idx]["count"]
         else:
             raise NotImplementedError
 
