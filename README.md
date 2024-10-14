@@ -17,6 +17,17 @@ pip install clip-jax
 
 Note: this package is currently under active development, install from source for latest version.
 
+For example:
+
+```bash
+git clone https://github.com/evanatyourservice/clip-jax.git && \
+cd clip-jax && \
+pip install -U pip && \
+pip install -e . && \
+pip install --force-reinstall --upgrade --no-cache-dir 'jax[tpu]' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html && \
+pip install 'numpy<2'
+```
+
 ## Usage
 
 ### Use a trained model
@@ -52,22 +63,23 @@ Here is an example command to train a model on a TPU v3-8:
 ```bash
 python train.py \
     --assert_TPU_available \
-    --config_name ../configs/small-patch16.json --dtype float32 \
-    --do_train --train_folder gs://my_bucket/datacomp/small/shards \
-    --output_dir gs://my_bucket/clip_model/$(date +"%Y%m%d%H%M%S") \
-    --num_train_epochs 10 \
-    --tokenizer_name openai/clip-vit-base-patch32 \
-    --batch_size_per_node 4096 --gradient_accumulation_steps 1 \
-    --learning_rate 0.00001 --warmup_steps 2000 --lr_offset 0 \
-    --optim distributed_shampoo --beta1 0.9 --beta2 0.99 --weight_decay 0.0 \
-    --block_size_text 512 --block_size_vision 512 --nesterov \
-    --graft_type rmsprop_normalized --preconditioning_compute_steps 20 \
-    --mp_devices 1 --shard_shampoo_across 2d \
-    --activation_partitioning_dims 1 --parameter_partitioning_dims 1 \
-    --loss_type sigmoid \
-    --gradient_checkpointing \
+    --output_dir /home/evanatyourservice/clip-jax/training/trained_model --overwrite_output_dir --checkpoints_to_keep 1 \
+    --config_name ../configs/mini-patch16-cappa.json \
+    --tokenizer_name boris/cappa-large-patch16-256-jax \
     --unroll 100 \
-    --logging_steps 100 --save_steps 5000
+    --train_folder ./datacomp1b_train.pkl --valid_folder ./datacomp1b_valid.pkl \
+    --image_crop_resize 256 \
+    --key_caption caption_normalized \
+    --do_train --do_eval \
+    --n_predict 128 --n_predict_batch 8 \
+    --dtype bfloat16 --float32_logits \
+    --remat_policy none \
+    --learning_rate 1.0e-4 --warmup_steps 2000 --lr_offset 0 \
+    --batch_size_per_node 1024 --gradient_accumulation 1 --num_train_epochs 2 --vision_projection_only False \
+    --valid_batch_size_per_node 256 --weight_decay 0.0 \
+    --optim distributed_shampoo --beta1 0.9 --beta2 0.99 --preconditioning_compute_steps 100 --block_size_text 512 --block_size_vision 512 --nesterov --graft_type rmsprop_normalized \
+    --mp_devices 1 --shard_shampoo_across 2d --activation_partitioning_dims 1 --parameter_partitioning_dims 1 \
+    --logging_steps 100 --eval_steps 2000 --save_steps 2000
 ```
 
 ## Acknowledgements
@@ -169,5 +181,3 @@ python train.py \
       url={https://arxiv.org/abs/2306.14610}, 
 }
 ```
-
-```bibtex

@@ -18,6 +18,7 @@ dependencies = [
     "aqtp",
     "wandb",
     "psgd-jax",
+    "precondition-opt",
 ]
 
 [project.optional-dependencies]
