@@ -234,6 +234,9 @@ class Dataset:
                         # shuffle files
                         ds = ds.shuffle(len(files))
 
+                # TODO: (evanatyourservice): CHANGED TEMPORARILY TO TEST
+                ds = ds.repeat()
+
                 # parse dataset
                 if self.min_original_image_size is None and self.max_original_aspect_ratio is None:
                     ds = ds.map(
