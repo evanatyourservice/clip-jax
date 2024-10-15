@@ -26,7 +26,6 @@ import wandb
 from flax.core import FrozenDict
 from flax.training import orbax_utils
 from flax.traverse_util import flatten_dict, unflatten_dict
-from jax import numpy as jnp
 from jax.experimental import multihost_utils
 from jax.experimental.compilation_cache import compilation_cache as cc
 from jax.experimental.mesh_utils import create_device_mesh
@@ -473,7 +472,7 @@ class DataTrainingArguments:
         metadata={"help": ("The maximum aspect ratio of each original image from training set.")},
     )
     seed_dataset: Optional[int] = field(
-        default=None,
+        default=42,
         metadata={"help": "The seed used to augment the dataset."},
     )
     format: Optional[str] = field(default="rgb", metadata={"help": "The format of the images (rgb or lab)."})
@@ -698,6 +697,9 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+
+    np.random.seed(training_args.seed_dataset)
+    tf.random.set_seed(training_args.seed_dataset)
 
     # Use jax cache
     if not training_args.no_cache:
