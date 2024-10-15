@@ -1154,7 +1154,6 @@ def main():
         # psgd kron handles scanned layers internally so we pass in a tree of booleans
         # indicating which layers to scan
         _opt = [
-            optax.clip_by_global_norm(training_args.max_grad_norm),
             scale_by_kron(
                 b1=training_args.beta1,
                 preconditioner_update_probability=precond_update_prob_schedule(
@@ -1165,6 +1164,9 @@ def main():
                 scanned_layers=scanned_params_bool(
                     trainable_params(params, training_args)
                 ),
+                momentum_into_preconditioner=True,
+                global_clipping=False,
+                elementwise_clipping=False,
             )
         ]
         if training_args.weight_decay > 0:

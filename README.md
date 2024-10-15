@@ -75,11 +75,11 @@ python train.py \
     --dtype bfloat16 --float32_logits \
     --remat_policy none \
     --learning_rate 1.0e-4 --warmup_steps 2000 --lr_offset 0 \
-    --batch_size_per_node 256 --gradient_accumulation 1 --num_train_epochs 2 --vision_projection_only False \
-    --valid_batch_size_per_node 32 --weight_decay 0.0 \
+    --batch_size_per_node 512 --gradient_accumulation 1 --num_train_epochs 2 --vision_projection_only False \
+    --valid_batch_size_per_node 64 --weight_decay 0.0 \
     --optim kron --beta1 0.9 --beta2 0.99 --preconditioning_compute_steps 32 --block_size_text 256 --block_size_vision 256 --nesterov --graft_type rmsprop_normalized \
     --mp_devices 1 --shard_shampoo_across model --activation_partitioning_dims 1 --parameter_partitioning_dims 1 \
-    --logging_steps 25 --eval_steps 2000 --save_steps 2000
+    --logging_steps 50 --eval_steps 500 --save_steps 2000
 ```
 
 ## Acknowledgements
