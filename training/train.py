@@ -321,6 +321,7 @@ class TrainingArguments:
         ], f"Selected loss type not supported: {self.loss_type}"
         assert self.optim in [
             "distributed_shampoo",
+            "kron",
             "adam",
             "adafactor",
         ], f"Unknown optimizer {self.optim}"
@@ -1144,7 +1145,7 @@ def main():
                 update_fn_vision if any(name in k for name in ["vision", "scanned_vision"]) else update_fn_text,
             )
 
-    elif training_args.optim in ["psgd", "psgd_kron", "kron"]:
+    elif training_args.optim == "kron":
         if isMaxtext:
             raise NotImplementedError("PSGD not supported for MaxText")
         # psgd kron handles scanned layers internally so we pass in a tree of booleans
@@ -1363,7 +1364,7 @@ def main():
             pprint(psgd_full_specs, width=100)
         return psgd_full_specs
 
-    if training_args.optim in ["psgd", "psgd_kron", "kron"]:
+    if training_args.optim == "kron":
         opt_state_spec = get_opt_state_spec_psgd()
     else:
         opt_state_spec = get_opt_state_spec()
@@ -1378,7 +1379,7 @@ def main():
 
     @partial(pjit, in_shardings=(params_spec,), out_shardings=opt_state_spec)
     def init_opt_state(params):
-        if training_args.optim in ["psgd", "psgd_kron", "kron"]:
+        if training_args.optim == "kron":
             return optimizer.init(trainable_params(params, training_args))
         opt_state = {}
         for k, p in split_scanned_params(trainable_params(params, training_args)).items():
@@ -1407,7 +1408,7 @@ def main():
 
     # Define update function
     def update_params(params, opt_state, grads):
-        if training_args.optim in ["psgd", "psgd_kron", "kron"]:
+        if training_args.optim == "kron":
             grads = trainable_params(grads, training_args)
             params = trainable_params(params, training_args)
             updates, new_opt_state = optimizer.update(grads, opt_state, params)
@@ -1661,7 +1662,7 @@ def main():
             opt_state_step = new_opt_state["text"][0] if "text" in new_opt_state else new_opt_state["vision"][0]
         elif training_args.optim == "adafactor":
             opt_state_step = new_opt_state["text"][2].count
-        elif training_args.optim in ["psgd", "psgd_kron", "kron"]:
+        elif training_args.optim == "kron":
             psgd_idx = 0
             for part in new_opt_state:
                 if isinstance(part, dict):  # kron state is a dictionary
