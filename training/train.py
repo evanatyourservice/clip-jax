@@ -1299,7 +1299,7 @@ def main():
         model_size = mesh.shape["model"]
 
         def shard_psgd_precond(Qs: list):
-            if training_args.shard_shampoo_across == "2d":
+            """if training_args.shard_shampoo_across == "2d":
                 first_dim = "model" if training_args.mp_devices > training_args.dp_devices else "data"
                 last_dim = "data" if training_args.mp_devices > training_args.dp_devices else "model"
             elif training_args.shard_shampoo_across == "model":
@@ -1309,7 +1309,9 @@ def main():
                 first_dim = "data"
                 last_dim = None
             else:
-                raise ValueError(f"Invalid shard_shampoo_across: {training_args.shard_shampoo_across}")
+                raise ValueError(f"Invalid shard_shampoo_across: {training_args.shard_shampoo_across}")"""
+            first_dim = "model"  # match contracting axis with majority of model sharding
+            last_dim = "data" if training_args.shard_shampoo_across == "2d" else None
             precond_specs = []
             for precond in Qs:
                 shape = precond.shape
