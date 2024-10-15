@@ -1143,7 +1143,7 @@ def main():
                 optimizer[k].init_fn,
                 update_fn_vision if any(name in k for name in ["vision", "scanned_vision"]) else update_fn_text,
             )
-    
+
     elif training_args.optim in ["psgd", "psgd_kron", "kron"]:
         if isMaxtext:
             raise NotImplementedError("PSGD not supported for MaxText")
@@ -1279,14 +1279,18 @@ def main():
                     is_leaf=lambda x: isinstance(x, PartitionSpec),
                 )
         return opt_state_spec
-    
+
     def get_opt_state_spec_psgd():
         # a little different from above because psgd scans layers internally
         temp_params = trainable_params(logical_params, training_args)
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
         params_specs = trainable_params(params_spec, training_args)
 
-        # can just explicitly set everything, opt state should be tuple where one 
+        if jax.process_index() == 0:
+            print("params sharding specs:")
+            pprint(params_specs, width=100)
+
+        # can just explicitly set everything, opt state should be tuple where one
         # entry is scale_by_kron.
         psgd_idx = 0
         for part in opt_state_shapes:
@@ -1375,7 +1379,7 @@ def main():
     @partial(pjit, in_shardings=(params_spec,), out_shardings=opt_state_spec)
     def init_opt_state(params):
         if training_args.optim in ["psgd", "psgd_kron", "kron"]:
-            return optimizer.init(params)
+            return optimizer.init(trainable_params(params, training_args))
         opt_state = {}
         for k, p in split_scanned_params(trainable_params(params, training_args)).items():
             init_fn = optimizer[k].init
@@ -1404,6 +1408,8 @@ def main():
     # Define update function
     def update_params(params, opt_state, grads):
         if training_args.optim in ["psgd", "psgd_kron", "kron"]:
+            grads = trainable_params(grads, training_args)
+            params = trainable_params(params, training_args)
             updates, new_opt_state = optimizer.update(grads, opt_state, params)
             new_params = optax.apply_updates(params, updates)
             return new_params, new_opt_state
