@@ -1344,7 +1344,7 @@ def main():
         for k, v in opt_state_shapes[psgd_idx].items():
             if k == "count":
                 # count is not sharded
-                psgd_specs[k] = PartitionSpec(None)
+                psgd_specs[k] = PartitionSpec()
             elif k == "mu":
                 # momentum matches params
                 psgd_specs[k] = params_specs
@@ -1355,7 +1355,7 @@ def main():
                 )
                 psgd_specs[k] = precond_specs
 
-        psgd_full_specs = [PartitionSpec(None)] * len(opt_state_shapes)
+        psgd_full_specs = [PartitionSpec()] * len(opt_state_shapes)
         psgd_full_specs[psgd_idx] = psgd_specs
         psgd_full_specs = tuple(psgd_full_specs)
         if jax.process_index() == 0:
