@@ -102,6 +102,12 @@ def scale_by_kron(
             return fn(*args)
 
     def init_fn(params):
+        params = jax.tree.map(
+            lambda x: x.unbox() if isinstance(x, nn.Partitioned) else x,
+            params,
+            is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
+        )
+
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
             scanned_layers_ = jax.tree.map(lambda _: False, params)
@@ -166,6 +172,16 @@ def scale_by_kron(
         count_inc = safe_int32_increment(state["count"])
         key = jax.random.fold_in(jax.random.PRNGKey(5318008), state["count"])
 
+        # account for flax.linen.Partitioned grads
+        boxed_updates, grads_structure = jax.tree.flatten(
+            updates, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
+        )
+        flax_partitioned = False
+        if isinstance(boxed_updates[0], nn.Partitioned):
+            flax_partitioned = True
+            updates = [u.unbox() for u in boxed_updates]
+            updates = grads_structure.unflatten(updates)
+
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
             scanned_layers_ = jax.tree.map(lambda _: False, updates)
@@ -186,9 +202,7 @@ def scale_by_kron(
             momentum_updates = mu
 
         # flatten pytrees
-        updates, grads_structure = jax.tree.flatten(
-            updates, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
-        )
+        updates, grads_structure = jax.tree.flatten(updates)
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
@@ -289,6 +303,10 @@ def scale_by_kron(
         precond_gs = _global_clip(precond_gs, max_norm)
         # element-wise clipping (1.0)
         precond_gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), precond_gs)
+
+        # box preconditioned grads
+        if flax_partitioned:
+            precond_gs = [u.replace_boxed(pg) for u, pg in zip(boxed_updates, precond_gs)]
 
         # unflatten pytrees
         updates = grads_structure.unflatten(precond_gs)
