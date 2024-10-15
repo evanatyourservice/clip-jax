@@ -698,8 +698,8 @@ def main():
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    np.random.seed(training_args.seed_dataset)
-    tf.random.set_seed(training_args.seed_dataset)
+    np.random.seed(data_args.seed_dataset)
+    tf.random.set_seed(data_args.seed_dataset)
 
     # Use jax cache
     if not training_args.no_cache:
