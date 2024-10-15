@@ -1154,7 +1154,6 @@ def main():
             optax.clip_by_global_norm(training_args.max_grad_norm),
             scale_by_kron(
                 b1=training_args.beta1,
-                weight_decay=training_args.weight_decay,
                 preconditioner_update_probability=precond_update_prob_schedule(
                     min_prob=1 / training_args.preconditioning_compute_steps,
                 ),
