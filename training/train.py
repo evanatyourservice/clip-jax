@@ -548,11 +548,14 @@ def split_scanned_params(data):
 
 def scanned_params_bool(data):
     """Get pytree of booleans indicating scanned layers"""
-    all_false = jax.tree.map(lambda _: False, data)
-    scanned_layers = flax.traverse_util.ModelParamTraversal(
-        lambda k, _: "layers" in k
-    ).update(lambda _: True, all_false)
-    return scanned_layers
+    flat = flatten_dict(data)
+    scanned = {}
+    for k, v in flat.items():
+        if "layers" in k:
+            scanned[k] = True
+        else:
+            scanned[k] = False
+    return unflatten_dict(scanned)
 
 
 def unsplit_scanned_params(data):
