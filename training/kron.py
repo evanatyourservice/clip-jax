@@ -53,11 +53,7 @@ def scale_by_kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
-    precond_lr: float = 0.1,
-    precond_init_scale: float = 1.0,
-    momentum_into_preconditioner: bool = True,
-    global_clipping: bool = True,
-    elementwise_clipping: bool = False,
+    trust_region_cap: float = 4.0,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -88,9 +84,9 @@ def scale_by_kron(
     precond_dtype = canonicalize_dtype(precond_dtype)
 
     # some hardcoded settings
-    # precond_lr = 0.1
-    # precond_init_scale = 1.0
-    # momentum_into_preconditioner = True
+    precond_lr = 0.1
+    precond_init_scale = 1.0
+    momentum_into_preconditioner = True
 
     def map_fn(do_map, fn, *args):
         """Maybe map a fn along first axis."""
@@ -299,17 +295,15 @@ def scale_by_kron(
         ]
 
         # trust region
-        # global clipping (sqrt n params)
-        if global_clipping:
-            max_norm = jnp.sqrt(
-                jnp.array(
-                    [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
-                ).sum()
-            )
-            precond_gs = _global_clip(precond_gs, max_norm)
-        # element-wise clipping (1.0)
-        if elementwise_clipping:
-            precond_gs = jax.tree.map(lambda x: jnp.clip(x, -1.0, 1.0), precond_gs)
+        max_norm = jnp.sqrt(
+            jnp.array(
+                [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
+            ).sum()
+        )
+        precond_gs = _global_clip(precond_gs, max_norm * trust_region_cap)
+        precond_gs = jax.tree.map(
+            lambda x: jnp.clip(x, -trust_region_cap, trust_region_cap), precond_gs
+        )
 
         # box preconditioned grads
         if flax_partitioned:
