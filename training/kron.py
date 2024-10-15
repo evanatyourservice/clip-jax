@@ -6,6 +6,7 @@ import chex
 import jax
 from jax import vmap
 import jax.numpy as jnp
+import flax.linen as nn
 from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.linear_algebra import global_norm
@@ -186,7 +187,7 @@ def scale_by_kron(
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(
-            updates, is_leaf=lambda v: isinstance(v, chex.Array)
+            updates, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
         )
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
