@@ -55,9 +55,9 @@ def scale_by_kron(
     lax_map_batch_size: int = 8,
     precond_lr: float = 0.1,
     precond_init_scale: float = 1.0,
-    momentum_into_preconditioner: bool = True,
+    momentum_into_preconditioner: bool = False,
     global_clipping: bool = True,
-    elementwise_clipping: bool = True,
+    elementwise_clipping: bool = False,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.

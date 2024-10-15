@@ -1160,13 +1160,9 @@ def main():
                     min_prob=1 / training_args.preconditioning_compute_steps,
                 ),
                 max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
-                precision="float32",  # matmul precision
                 scanned_layers=scanned_params_bool(
                     trainable_params(params, training_args)
                 ),
-                momentum_into_preconditioner=True,
-                global_clipping=False,
-                elementwise_clipping=False,
             )
         ]
         if training_args.weight_decay > 0:
