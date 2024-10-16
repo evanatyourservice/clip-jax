@@ -53,7 +53,7 @@ def scale_by_kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
-    trust_region_cap: float = 5.0,
+    trust_region_limit: float = 6.0,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -300,9 +300,9 @@ def scale_by_kron(
                 [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
             ).sum()
         )
-        precond_gs = _global_clip(precond_gs, max_norm * trust_region_cap)
+        precond_gs = _global_clip(precond_gs, max_norm * trust_region_limit)
         precond_gs = jax.tree.map(
-            lambda x: jnp.clip(x, -trust_region_cap, trust_region_cap), precond_gs
+            lambda x: jnp.clip(x, -trust_region_limit, trust_region_limit), precond_gs
         )
 
         # box preconditioned grads
