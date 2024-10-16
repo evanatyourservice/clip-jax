@@ -133,7 +133,7 @@ class TrainingArguments:
         metadata={"help": "Beta2 for for Adam & Distributed Shampoo."},
     )
     adam_epsilon: float = field(default=1e-8, metadata={"help": "Epsilon for AdamW optimizer."})
-    max_grad_norm: float = field(default=1.0, metadata={"help": "Max gradient norm for Adafactor and PSGD."})
+    max_grad_norm: float = field(default=1.0, metadata={"help": "Max gradient norm for Adafactor."})
     block_size_text: int = field(
         default=1024,
         metadata={"help": "Chunked size for large layers with Distributed Shampoo."},
@@ -697,9 +697,6 @@ def main():
         model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
-
-    np.random.seed(data_args.seed_dataset)
-    tf.random.set_seed(data_args.seed_dataset)
 
     # Use jax cache
     if not training_args.no_cache:
