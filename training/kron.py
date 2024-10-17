@@ -387,7 +387,7 @@ def kron(
     ]
     if weight_decay > 0:
         opt.append(transform.add_decayed_weights(weight_decay, mask=mask))
-    opt.append(transform.scale_by_clipped_trust_ratio())
+    opt.append(scale_by_clipped_trust_ratio())
     opt.append(transform.scale_by_learning_rate(learning_rate))
     return chain(*opt)
 
