@@ -341,7 +341,6 @@ def kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
-    trust_ratio_clip: float = 1.0,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -388,7 +387,7 @@ def kron(
     ]
     if weight_decay > 0:
         opt.append(transform.add_decayed_weights(weight_decay, mask=mask))
-    opt.append(transform.scale_by_clipped_trust_ratio(trust_ratio_clip))
+    opt.append(transform.scale_by_clipped_trust_ratio())
     opt.append(transform.scale_by_learning_rate(learning_rate))
     return chain(*opt)
 

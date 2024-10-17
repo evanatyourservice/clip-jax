@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from functools import partial
 from platform import python_version
-from pprint import pformat
+from pprint import pformat, pprint
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 import flax
@@ -36,7 +36,7 @@ from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from PIL import Image
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
-from kron import scale_by_kron, precond_update_prob_schedule
+from kron import kron, precond_update_prob_schedule
 from tqdm import tqdm
 from transformers import HfArgumentParser
 
@@ -1153,23 +1153,18 @@ def main():
             raise NotImplementedError("PSGD not supported for MaxText")
         # psgd kron handles scanned layers internally so we pass in a tree of booleans
         # indicating which layers to scan
-        _opt = [
-            scale_by_kron(
-                b1=training_args.beta1,
-                preconditioner_update_probability=precond_update_prob_schedule(
-                    min_prob=1 / training_args.preconditioning_compute_steps,
-                ),
-                max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
-                scanned_layers=scanned_params_bool(
-                    trainable_params(params, training_args)
-                ),
-            )
-        ]
-        if training_args.weight_decay > 0:
-            _opt.append(optax.add_decayed_weights(training_args.weight_decay))
-        _opt.append(optax.scale_by_learning_rate(learning_rate_fn))
-
-        optimizer = optax.chain(*_opt)
+        optimizer = kron(
+            learning_rate=learning_rate_fn,
+            b1=training_args.beta1,
+            weight_decay=training_args.weight_decay,
+            preconditioner_update_probability=precond_update_prob_schedule(
+                min_prob=1 / training_args.preconditioning_compute_steps,
+            ),
+            max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
+            scanned_layers=scanned_params_bool(
+                trainable_params(params, training_args)
+            ),
+        )
 
     elif training_args.optim == "adam":
         _opt = partial(
