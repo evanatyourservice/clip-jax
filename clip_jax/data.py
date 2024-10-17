@@ -225,7 +225,7 @@ class Dataset:
                 # non deterministic read (faster)
                 if augment:
                     ignore_order = tf.data.Options()
-                    ignore_order.deterministic = True
+                    ignore_order.deterministic = False
                     ds = ds.with_options(ignore_order)
 
                     if self.multi_hosts:
@@ -233,9 +233,6 @@ class Dataset:
                         ds = ds.repeat()
                         # shuffle files
                         ds = ds.shuffle(len(files))
-
-                    # TODO: (evanatyourservice): CHANGED TEMPORARILY TO TEST ON SINGLE NODE
-                    ds = ds.repeat()
 
                 # parse dataset
                 if self.min_original_image_size is None and self.max_original_aspect_ratio is None:

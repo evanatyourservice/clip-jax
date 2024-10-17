@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from functools import partial
 from platform import python_version
-from pprint import pformat, pprint
+from pprint import pformat
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 import flax
@@ -26,6 +26,7 @@ import wandb
 from flax.core import FrozenDict
 from flax.training import orbax_utils
 from flax.traverse_util import flatten_dict, unflatten_dict
+from jax import numpy as jnp
 from jax.experimental import multihost_utils
 from jax.experimental.compilation_cache import compilation_cache as cc
 from jax.experimental.mesh_utils import create_device_mesh

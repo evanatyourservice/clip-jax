@@ -53,7 +53,6 @@ def scale_by_kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
-    trust_region_limit: float = 6.0,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -169,7 +168,8 @@ def scale_by_kron(
         return dict(count=jnp.zeros([], jnp.int32), mu=mu, Qs_preconditioners=Qs)
 
     def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
-        del params
+        if params is None:
+            raise ValueError("params must be provided to kron update_fn")
         count_inc = safe_int32_increment(state["count"])
         key = jax.random.fold_in(jax.random.PRNGKey(5318008), state["count"])
 
@@ -295,15 +295,16 @@ def scale_by_kron(
         ]
 
         # trust region
-        max_norm = jnp.sqrt(
-            jnp.array(
-                [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
-            ).sum()
-        )
-        precond_gs = _global_clip(precond_gs, max_norm * trust_region_limit)
-        precond_gs = jax.tree.map(
-            lambda x: jnp.clip(x, -trust_region_limit, trust_region_limit), precond_gs
-        )
+        # max_norm = jnp.sqrt(
+        #     jnp.array(
+        #         [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
+        #     ).sum()
+        # )
+        # precond_gs = _global_clip(precond_gs, max_norm * trust_region_limit)
+        # precond_gs = jax.tree.map(
+        #     lambda x: jnp.clip(x, -trust_region_limit, trust_region_limit), precond_gs
+        # )
+
 
         # box preconditioned grads
         if flax_partitioned:
@@ -340,6 +341,7 @@ def kron(
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
+    trust_ratio_clip: float = 1.0,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -386,6 +388,7 @@ def kron(
     ]
     if weight_decay > 0:
         opt.append(transform.add_decayed_weights(weight_decay, mask=mask))
+    opt.append(transform.scale_by_clipped_trust_ratio(trust_ratio_clip))
     opt.append(transform.scale_by_learning_rate(learning_rate))
     return chain(*opt)
 
@@ -621,3 +624,28 @@ def _precond_grad(Q, G, exprs):
     """Precondition gradient G with preconditioner Q."""
     exprP = exprs[-1]
     return jnp.einsum(exprP, *[q.conj() for q in Q], *Q, G)
+
+
+def scale_by_clipped_trust_ratio(trust_ratio_clip: float = 1.0) -> base.GradientTransformation:
+    def update_fn(updates, state, params):
+        if params is None:
+            raise ValueError(base.NO_PARAMS_MSG)
+
+        def _scale_update(update, param):
+            param_norm = jnp.linalg.norm(param)
+            update_norm = jnp.linalg.norm(update)
+            trust_ratio = param_norm / jnp.where(update_norm == 0.0, 1.0, update_norm)
+
+            zero_norm = jnp.logical_or(param_norm == 0.0, update_norm == 0.0)
+            safe_trust_ratio = jnp.where(
+                zero_norm, jnp.array(1.0, dtype=param.dtype), trust_ratio
+            )
+
+            safe_trust_ratio = jnp.maximum(safe_trust_ratio, trust_ratio_clip)
+
+            return update * safe_trust_ratio
+
+        updates = jax.tree.map(_scale_update, updates, params)
+        return updates, state
+
+    return base.GradientTransformation(base.init_empty_state, update_fn)

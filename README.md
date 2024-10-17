@@ -67,7 +67,7 @@ python train.py \
     --config_name ../configs/mini-patch16-cappa.json \
     --tokenizer_name boris/cappa-large-patch16-256-jax \
     --unroll 100 \
-    --train_folder ./train_sample --valid_folder ./valid_sample \
+    --train_folder ./datacomp1b_train.pkl --valid_folder ./datacomp1b_valid.pkl \
     --image_crop_resize 256 \
     --key_caption caption_normalized \
     --do_train --do_eval \
@@ -76,10 +76,10 @@ python train.py \
     --remat_policy none \
     --learning_rate 1.0e-4 --warmup_steps 2000 --lr_offset 0 \
     --batch_size_per_node 512 --gradient_accumulation 1 --num_train_epochs 2 --vision_projection_only False \
-    --valid_batch_size_per_node 64 --weight_decay 0.0 \
-    --optim kron --beta1 0.9 --beta2 0.99 --preconditioning_compute_steps 32 --block_size_text 256 --block_size_vision 256 --nesterov --graft_type rmsprop_normalized \
-    --mp_devices 1 --shard_shampoo_across model --activation_partitioning_dims 1 --parameter_partitioning_dims 1 \
-    --logging_steps 50 --eval_steps 500 --save_steps 2000
+    --valid_batch_size_per_node 256 --weight_decay 0.0 \
+    --optim distributed_shampoo --beta1 0.9 --beta2 0.99 --preconditioning_compute_steps 20 --block_size_text 1024 --block_size_vision 1024 --nesterov --graft_type rmsprop_normalized \
+    --mp_devices 1 --shard_shampoo_across 2d --activation_partitioning_dims 1 --parameter_partitioning_dims 1 \
+    --logging_steps 100 --eval_steps 2000 --save_steps 2000
 ```
 
 ## Acknowledgements
