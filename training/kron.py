@@ -84,7 +84,7 @@ def scale_by_kron(
 
     # some hardcoded settings
     precond_lr = 0.1
-    precond_init_scale = 1.0
+    precond_init_scale = 1e-6
     momentum_into_preconditioner = True
 
     def map_fn(do_map, fn, *args):
@@ -295,16 +295,16 @@ def scale_by_kron(
         ]
 
         # trust region
-        trust_region_limit = 3.0
-        max_norm = jnp.sqrt(
-            jnp.array(
-                [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
-            ).sum()
-        )
-        precond_gs = _global_clip(precond_gs, max_norm * trust_region_limit)
-        precond_gs = jax.tree.map(
-            lambda x: jnp.clip(x, -trust_region_limit, trust_region_limit), precond_gs
-        )
+        # trust_region_limit = 3.0
+        # max_norm = jnp.sqrt(
+        #     jnp.array(
+        #         [p.size for p in jax.tree.leaves(precond_gs)], dtype=jnp.float32
+        #     ).sum()
+        # )
+        # precond_gs = _global_clip(precond_gs, max_norm * trust_region_limit)
+        # precond_gs = jax.tree.map(
+        #     lambda x: jnp.clip(x, -trust_region_limit, trust_region_limit), precond_gs
+        # )
 
         # box preconditioned grads
         if flax_partitioned:
@@ -387,7 +387,7 @@ def kron(
     ]
     if weight_decay > 0:
         opt.append(transform.add_decayed_weights(weight_decay, mask=mask))
-    # opt.append(scale_by_clipped_trust_ratio())
+    opt.append(scale_by_clipped_trust_ratio())
     opt.append(transform.scale_by_learning_rate(learning_rate))
     return chain(*opt)
 
