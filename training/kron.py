@@ -377,8 +377,6 @@ def kron(
         scale_by_kron(
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
-            weight_decay=weight_decay,
-            weight_decay_mask=weight_decay_mask,
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             min_ndim_triangular=min_ndim_triangular,
