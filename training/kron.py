@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import flax.linen as nn
 from optax import tree_utils as otu
 from optax._src import base, transform
-from optax._src.linear_algebra import global_norm
 from optax._src.numerics import safe_int32_increment
 from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
@@ -295,8 +294,11 @@ def scale_by_kron(
             ]
 
         # trust region
+        # precond_gs = jax.tree.map(
+        #     lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
+        # )
         precond_gs = jax.tree.map(
-            lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
+            lambda x: jnp.sign(x) * jnp.sqrt(jnp.abs(x)), precond_gs
         )
 
         # box preconditioned grads
