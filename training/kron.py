@@ -300,18 +300,14 @@ def scale_by_kron(
         ]
 
         # trust region
-        precond_gs = jax.tree.map(
-            lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
-        )
+        precond_gs = [jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0) for x in precond_gs]
 
         # weight decay
         if weight_decay > 0:
-            precond_gs = jax.tree.map(
-                lambda x, p, m: x + weight_decay * p if m else x,
-                precond_gs,
-                params,
-                weight_decay_mask,
-            )
+            precond_gs = [
+                x + weight_decay * p if m else x
+                for x, p, m in zip(precond_gs, params, weight_decay_mask)
+            ]
 
         # scale by clipped trust ratio
         precond_gs = scale_by_clipped_trust_ratio(precond_gs, params)
@@ -645,5 +641,6 @@ def scale_by_clipped_trust_ratio(
 
         return update * safe_trust_ratio
 
-    updates = jax.tree.map(_scale_update, updates, params)
-    return updates
+    return [
+        _scale_update(update, param) for update, param in zip(updates, params)
+    ]
