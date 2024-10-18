@@ -178,7 +178,7 @@ def scale_by_kron(
         count_inc = safe_int32_increment(state["count"])
         key = jax.random.fold_in(jax.random.PRNGKey(5318008), state["count"])
 
-        # account for flax.linen.Partitioned grads
+        # account for flax.linen.Partitioned grads and params
         boxed_updates, grads_structure = jax.tree.flatten(
             updates, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
         )
@@ -187,6 +187,12 @@ def scale_by_kron(
             flax_partitioned = True
             updates = [u.unbox() for u in boxed_updates]
             updates = grads_structure.unflatten(updates)
+        boxed_params, params_structure = jax.tree.flatten(
+            params, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
+        )
+        if isinstance(boxed_params[0], nn.Partitioned):
+            params = [u.unbox() for u in boxed_params]
+            params = params_structure.unflatten(params)
 
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
