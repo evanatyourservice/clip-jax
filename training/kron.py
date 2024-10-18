@@ -628,7 +628,7 @@ def _precond_grad(Q, G, exprs):
 
 
 def scale_by_clipped_trust_ratio(
-    updates, params, trust_ratio_clip: Optional[float] = 1.0
+    updates, params, trust_ratio_clip: Optional[float] = None
 ):
     def _scale_update(update, param):
         param_norm = jnp.linalg.norm(param)
