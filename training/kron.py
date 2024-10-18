@@ -318,7 +318,7 @@ def scale_by_kron(
 
         # scale by clipped trust ratio
         precond_gs = scale_by_clipped_trust_ratio(
-            precond_gs, params, trust_ratio_clip=1.0
+            precond_gs, params, trust_ratio_clip=None
         )
 
         # box preconditioned grads
