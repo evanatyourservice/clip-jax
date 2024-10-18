@@ -215,6 +215,7 @@ def scale_by_kron(
 
         # flatten pytrees
         updates, grads_structure = jax.tree.flatten(updates)
+        params = grads_structure.flatten_up_to(params)
         momentum_updates = grads_structure.flatten_up_to(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
@@ -316,7 +317,9 @@ def scale_by_kron(
             ]
 
         # scale by clipped trust ratio
-        precond_gs = scale_by_clipped_trust_ratio(precond_gs, params)
+        precond_gs = scale_by_clipped_trust_ratio(
+            precond_gs, params, trust_ratio_clip=1.0
+        )
 
         # box preconditioned grads
         if flax_partitioned:
