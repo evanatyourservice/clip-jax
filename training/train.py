@@ -1162,9 +1162,7 @@ def main():
             ),
             max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
             precision="float32",  # matmul precision
-            scanned_layers=scanned_params_bool(
-                trainable_params(params, training_args)
-            ),
+            scanned_layers=scanned_params_bool(trainable_params(params, training_args)),
         )
 
     elif training_args.optim == "adam":
