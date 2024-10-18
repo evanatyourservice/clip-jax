@@ -307,18 +307,22 @@ def scale_by_kron(
         ]
 
         # trust region
-        precond_gs = [jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0) for x in precond_gs]
+        precond_gs = jax.tree.map(
+            lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1.0), precond_gs
+        )
 
         # weight decay
         if weight_decay > 0:
-            precond_gs = [
-                x + weight_decay * p if m else x
-                for x, p, m in zip(precond_gs, params, weight_decay_mask)
-            ]
+            precond_gs = jax.tree.map(
+                lambda x, p, m: x + weight_decay * p if m else x,
+                precond_gs,
+                params,
+                weight_decay_mask,
+            )
 
         # scale by clipped trust ratio
-        precond_gs = scale_by_clipped_trust_ratio(
-            precond_gs, params, trust_ratio_clip=None
+        precond_gs = scale_by_trust_ratio(
+            precond_gs, params, trust_ratio_min=0.01, trust_ratio_max=None
         )
 
         # box preconditioned grads
@@ -632,24 +636,24 @@ def _precond_grad(Q, G, exprs):
     return jnp.einsum(exprP, *[q.conj() for q in Q], *Q, G)
 
 
-def scale_by_clipped_trust_ratio(
-    updates, params, trust_ratio_clip: Optional[float] = None
+def scale_by_trust_ratio(
+    updates,
+    params,
+    trust_ratio_min: Optional[float] = None,
+    trust_ratio_max: Optional[float] = None,
 ):
     def _scale_update(update, param):
         param_norm = jnp.linalg.norm(param)
         update_norm = jnp.linalg.norm(update)
         trust_ratio = param_norm / jnp.where(update_norm == 0.0, 1.0, update_norm)
 
-        zero_norm = jnp.logical_or(param_norm == 0.0, update_norm == 0.0)
-        safe_trust_ratio = jnp.where(
-            zero_norm, jnp.array(1.0, dtype=param.dtype), trust_ratio
-        )
+        # zero_norm = jnp.logical_or(param_norm == 0.0, update_norm == 0.0)
+        # safe_trust_ratio = jnp.where(
+        #     zero_norm, jnp.array(1.0, dtype=param.dtype), trust_ratio
+        # )
 
-        if trust_ratio_clip is not None:
-            safe_trust_ratio = jnp.minimum(safe_trust_ratio, trust_ratio_clip)
+        trust_ratio = jnp.clip(trust_ratio, trust_ratio_min, trust_ratio_max)
 
-        return update * safe_trust_ratio
+        return update * trust_ratio
 
-    return [
-        _scale_update(update, param) for update, param in zip(updates, params)
-    ]
+    return jax.tree.map(_scale_update, updates, params)
