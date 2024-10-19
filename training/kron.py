@@ -7,6 +7,7 @@ import jax
 from jax import vmap
 import jax.numpy as jnp
 import flax.linen as nn
+import optax
 from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.numerics import safe_int32_increment
@@ -384,6 +385,7 @@ def kron(
         optax.GradientTransformationExtraArgs
     """
     optimizer = [
+        optax.clip_by_global_norm(1.0),
         scale_by_kron(
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
