@@ -87,7 +87,7 @@ def scale_by_kron(
 
     preconditioner_lr = 0.1
     preconditioner_init_scale = 1.0
-    momentum_before_precond_update = False
+    momentum_before_precond_update = True
 
     def map_fn(do_map, fn, *args):
         """Maybe map a fn along first axis."""
@@ -309,10 +309,10 @@ def scale_by_kron(
         )
 
         # trust region
-        precond_gs = jax.tree.map(
-            lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1), precond_gs
-        )
-        # precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 3) * 3, precond_gs)
+        # precond_gs = jax.tree.map(
+        #     lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1), precond_gs
+        # )
+        precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 2) * 2, precond_gs)
 
         # box preconditioned grads
         if flax_partitioned:
@@ -385,7 +385,7 @@ def kron(
         optax.GradientTransformationExtraArgs
     """
     optimizer = [
-        # optax.clip_by_global_norm(1.0),
+        optax.clip_by_global_norm(1.0),
         scale_by_kron(
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
