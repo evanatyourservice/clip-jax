@@ -1565,8 +1565,10 @@ def main():
                 raise NotImplementedError
 
             if training_args.l2_reg > 0 and train:
-                trainable_params = trainable_params(params, training_args)
-                l2_reg = sum(jnp.sum(jnp.square(p)) for p in jax.tree.leaves(trainable_params))
+                l2_reg = sum(
+                    jnp.sum(jnp.square(p))
+                    for p in jax.tree.leaves(trainable_params(params, training_args))
+                )
                 loss += l2_reg * training_args.l2_reg
 
             return loss
