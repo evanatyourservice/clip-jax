@@ -284,7 +284,7 @@ def scale_by_kron(
                     """
                     grad_norm = jnp.linalg.norm(grads)
                     min_norm = jnp.finfo(precond_dtype).eps
-                    return jnp.where(grad_norm < min_norm, old_Q, new_Q)
+                    return jax.lax.cond(grad_norm < min_norm, lambda: old_Q, lambda: new_Q)
                 
                 new_Qs = [
                     map_fn(s, _skip_if_small_grad, Q, new_Q, g)
