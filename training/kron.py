@@ -423,8 +423,8 @@ def kron(
     return chain(*optimizer)
 
 
-def _add_eps(x):
-    return jnp.clip(x, 1e-30, None)
+def _add_tiny(x):
+    return x + jnp.finfo(x.dtype).tiny
 
 
 def _norm_lower_bound(A: jax.Array):
@@ -625,14 +625,14 @@ def _update_precond(Q, G, conjB, exprs, precond_lr):
         if q.ndim < 2:
             q -= (
                 precond_lr
-                / _add_eps(jnp.max(jnp.abs(term1 + term2)))
+                / _add_tiny(jnp.max(jnp.abs(term1 + term2)))
                 * (term1 - term2)
                 * q
             )
         else:
             q -= (
                 precond_lr
-                / _add_eps(_norm_lower_bound(term1 + term2))
+                / _add_tiny(_norm_lower_bound(term1 + term2))
                 * jnp.triu(term1 - term2)
                 @ q
             )
