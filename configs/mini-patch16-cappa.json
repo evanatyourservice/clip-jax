@@ -6,7 +6,7 @@
       "gelu",
       "linear"
     ],
-    "normalize_qk": true,
+    "normalize_qk": false,
     "use_bias": false,
     "force_scale": false,
     "attention_dropout": 0.0,
@@ -40,7 +40,7 @@
       "gelu",
       "linear"
     ],
-    "normalize_qk": true,
+    "normalize_qk": false,
     "use_bias": false,
     "force_scale": false,
     "attention_dropout": 0.0,
