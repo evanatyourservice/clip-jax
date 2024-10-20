@@ -16,7 +16,7 @@ from optax._src.combine import chain
 
 
 def precond_update_prob_schedule(
-    max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=200
+    max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250
 ):
     """Anneal preconditioner update probability during beginning of training.
 
@@ -50,7 +50,7 @@ def scale_by_kron(
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_update_precision: str = "float32",
-    precond_grads_precision: str = "tensorfloat32",
+    precond_grads_precision: str = "bfloat16",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
@@ -85,7 +85,7 @@ def scale_by_kron(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
-    preconditioner_lr = 0.3
+    preconditioner_lr = 0.1
     preconditioner_init_scale = 1.0
     momentum_before_precond_update = True
 
@@ -348,7 +348,7 @@ def kron(
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_update_precision: str = "float32",
-    precond_grads_precision: str = "tensorfloat32",
+    precond_grads_precision: str = "bfloat16",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,

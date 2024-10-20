@@ -125,6 +125,7 @@ class TrainingArguments:
         metadata={"help": ('The optimizer to use. Can be "distributed_shampoo" (default), "kron", "adam" or "adafactor"')},
     )
     weight_decay: float = field(default=0.0, metadata={"help": "Weight decay applied to parameters."})
+    l2_reg: float = field(default=0.000001, metadata={"help": "L2 regularization added to the loss."})  # TODO
     beta1: float = field(
         default=0.9,
         metadata={"help": "Beta1 for Adam & Distributed Shampoo."},
@@ -1157,12 +1158,8 @@ def main():
             learning_rate=learning_rate_fn,
             b1=training_args.beta1,
             weight_decay=training_args.weight_decay,
-            # we increase the defaults because CapPa takes longer to get settled.
-            # increasing these defaults gives better results.
             preconditioner_update_probability=precond_update_prob_schedule(
                 min_prob=1 / training_args.preconditioning_compute_steps,
-                decay=0.0005,
-                flat_start=1000,
             ),
             max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
             scanned_layers=scanned_params_bool(trainable_params(params, training_args)),
@@ -1566,6 +1563,12 @@ def main():
                 loss = sigmoid_loss(outputs)
             else:
                 raise NotImplementedError
+
+            if training_args.l2_reg > 0 and train:
+                trainable_params = trainable_params(params, training_args)
+                l2_reg = sum(jnp.sum(jnp.square(p)) for p in jax.tree.leaves(trainable_params))
+                loss += l2_reg * training_args.l2_reg
+
             return loss
 
     # Define gradient update step fn
