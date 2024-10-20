@@ -235,7 +235,7 @@ def scale_by_kron(
                     for k, g in zip(Vs_keys, precond_updates_in)
                 ]
 
-                # maybe balance preconditioners (useful for quantization/low precision)
+                # balance preconditioners about every 100 updates
                 def balance_Qs(Qs: List[List[jax.Array]]):
                     def _balance_Q(Q: List[jax.Array]):
                         norms = jnp.array(
@@ -274,6 +274,22 @@ def scale_by_kron(
                     for s, exprs, Q, g, conjb in zip(
                         scanned_layers_, expressions, Qs, precond_updates_in, conjBs
                     )
+                ]
+
+                def _skip_if_small_grad(old_Q, new_Q, grads):
+                    """Block updating preconditioner if gradient was too small.
+                    
+                    This helps prevent numerical underflow and a resulting exploding 
+                    preconditioner.
+                    """
+                    grad_norm = jnp.linalg.norm(grads)
+                    min_norm = jnp.finfo(precond_dtype).eps
+                    return jnp.where(grad_norm < min_norm, old_Q, new_Q)
+                
+                new_Qs = [
+                    map_fn(s, _skip_if_small_grad, Q, new_Q, g)
+                    for s, Q, new_Q, g
+                    in zip(scanned_layers_, Qs, new_Qs, precond_updates_in)
                 ]
 
                 new_Qs = otu.tree_cast(new_Qs, precond_dtype)
