@@ -1157,8 +1157,12 @@ def main():
             learning_rate=learning_rate_fn,
             b1=training_args.beta1,
             weight_decay=training_args.weight_decay,
+            # we increase the defaults because CapPa takes longer to get settled.
+            # increasing these defaults gives better results.
             preconditioner_update_probability=precond_update_prob_schedule(
                 min_prob=1 / training_args.preconditioning_compute_steps,
+                decay=0.0005,
+                flat_start=1000,
             ),
             max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
             scanned_layers=scanned_params_bool(trainable_params(params, training_args)),
