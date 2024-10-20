@@ -323,6 +323,18 @@ def scale_by_kron(
             ),
             lambda: None,
         )
+        # print histogram of updates
+        jax.lax.cond(
+            count_inc % 25 == 0,
+            lambda: jax.debug.print(
+                "precond_gs: {hist}",
+                hist=sum(
+                    jnp.histogram(jnp.abs(x), bins=100, range=(0, 10))[0]
+                    for x in precond_gs
+                ),
+            ),
+            lambda: None,
+        )
 
         # trust region
         # precond_gs = jax.tree.map(
