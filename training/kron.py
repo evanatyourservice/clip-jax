@@ -24,8 +24,8 @@ def precond_update_prob_schedule(
     but once the preconditioner is learned the update probability can drop low.
 
     This schedule is an exponential anneal with a flat start. Default settings keep
-    update probability at 1.0 for 200 steps then exponentially anneal down to
-    `min_prob` by 4000 steps. Default settings work very well for most models and
+    update probability at 1.0 for 250 steps then exponentially anneal down to
+    `min_prob` by 4000 steps. Default settings work well for most models and 
     training regimes.
     """
 
@@ -227,7 +227,7 @@ def scale_by_kron(
                 else:
                     precond_updates_in = updates
 
-                # random vectors
+                # create random vectors
                 key, subkey = jax.random.split(key)
                 Vs_keys = jax.random.split(subkey, len(precond_updates_in))
                 Vs = [
@@ -284,7 +284,7 @@ def scale_by_kron(
                     """
                     grad_norm = jnp.linalg.norm(grads)
                     min_norm = jnp.finfo(precond_dtype).eps
-                    return jax.lax.cond(grad_norm < min_norm, lambda: old_Q, lambda: new_Q)
+                    return jax.lax.cond(grad_norm <= min_norm, lambda: old_Q, lambda: new_Q)
                 
                 new_Qs = [
                     map_fn(s, _skip_if_small_grad, Q, new_Q, g)
@@ -320,18 +320,6 @@ def scale_by_kron(
                 x2=jnp.array([jnp.mean(jnp.abs(x) ** 2) for x in precond_gs]).mean(),
                 x4=jnp.array([jnp.mean(jnp.abs(x) ** 4) for x in precond_gs]).mean(),
                 max=jnp.array([jnp.max(jnp.abs(x)) for x in precond_gs]).max(),
-            ),
-            lambda: None,
-        )
-        # print histogram of updates
-        jax.lax.cond(
-            count_inc % 25 == 0,
-            lambda: jax.debug.print(
-                "precond_gs: {hist}",
-                hist=sum(
-                    jnp.histogram(jnp.abs(x), bins=100, range=(0, 10))[0]
-                    for x in precond_gs
-                ),
             ),
             lambda: None,
         )
