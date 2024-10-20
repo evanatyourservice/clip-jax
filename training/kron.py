@@ -299,7 +299,8 @@ def scale_by_kron(
         jax.lax.cond(
             count_inc % 25 == 0,
             lambda: jax.debug.print(
-                "abs(x) {abs:.8e} x^2 {x2:.8e} x^4 {x4:.8e} max {max:.8e}",
+                "x {x:.8e} abs(x) {abs:.8e} x^2 {x2:.8e} x^4 {x4:.8e} max {max:.8e}",
+                x=jnp.array([jnp.mean(x) for x in precond_gs]).mean(),
                 abs=jnp.array([jnp.mean(jnp.abs(x)) for x in precond_gs]).mean(),
                 x2=jnp.array([jnp.mean(jnp.abs(x) ** 2) for x in precond_gs]).mean(),
                 x4=jnp.array([jnp.mean(jnp.abs(x) ** 4) for x in precond_gs]).mean(),
