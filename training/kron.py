@@ -85,7 +85,7 @@ def scale_by_kron(
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype)
 
-    preconditioner_lr = 0.1
+    preconditioner_lr = 0.01
     preconditioner_init_scale = 1.0
     momentum_before_precond_update = True
 
