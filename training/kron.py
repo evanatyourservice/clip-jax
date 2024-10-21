@@ -299,7 +299,7 @@ def scale_by_kron(
         # precond_gs = jax.tree.map(
         #     lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1), precond_gs
         # )
-        precond_gs = jax.tree.map(jnp.tanh, precond_gs)
+        precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 10) * 2, precond_gs)
 
         # box preconditioned grads
         if flax_partitioned:
