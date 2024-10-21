@@ -276,22 +276,6 @@ def scale_by_kron(
                     )
                 ]
 
-                def _skip_if_small_grad(old_Q, new_Q, grads):
-                    """Block updating preconditioner if gradient was too small.
-                    
-                    This helps prevent numerical underflow and a resulting exploding 
-                    preconditioner.
-                    """
-                    grad_norm = jnp.linalg.norm(grads)
-                    min_norm = jnp.finfo(precond_dtype).eps
-                    return jax.lax.cond(grad_norm <= min_norm, lambda: old_Q, lambda: new_Q)
-                
-                new_Qs = [
-                    map_fn(s, _skip_if_small_grad, Q, new_Q, g)
-                    for s, Q, new_Q, g
-                    in zip(scanned_layers_, Qs, new_Qs, precond_updates_in)
-                ]
-
                 new_Qs = otu.tree_cast(new_Qs, precond_dtype)
                 return new_Qs
 
@@ -328,7 +312,7 @@ def scale_by_kron(
         # precond_gs = jax.tree.map(
         #     lambda x: jnp.sign(x) * jnp.log(jnp.abs(x) + 1), precond_gs
         # )
-        precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 2) * 2, precond_gs)
+        precond_gs = jax.tree.map(jnp.tanh, precond_gs)
 
         # box preconditioned grads
         if flax_partitioned:
