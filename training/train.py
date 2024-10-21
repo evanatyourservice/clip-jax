@@ -125,7 +125,7 @@ class TrainingArguments:
         metadata={"help": ('The optimizer to use. Can be "distributed_shampoo" (default), "kron", "adam" or "adafactor"')},
     )
     weight_decay: float = field(default=0.0, metadata={"help": "Weight decay applied to parameters."})
-    l2_reg: float = field(default=0.0, metadata={"help": "L2 regularization added to the loss."})
+    l2_reg: float = field(default=1e-12, metadata={"help": "L2 regularization added to the loss."})
     beta1: float = field(
         default=0.9,
         metadata={"help": "Beta1 for Adam & Distributed Shampoo."},

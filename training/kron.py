@@ -49,7 +49,7 @@ def scale_by_kron(
     min_ndim_triangular: int = 2,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: str = "tensorfloat32",
+    precond_update_precision: str = "float32",
     precond_grads_precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
@@ -331,7 +331,7 @@ def kron(
     min_ndim_triangular: int = 2,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: str = "tensorfloat32",
+    precond_update_precision: str = "float32",
     precond_grads_precision: str = "tensorfloat32",
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
@@ -370,6 +370,7 @@ def kron(
     """
     optimizer = [
         scale_by_kron(
+            optax.clip_by_global_norm(1.0),
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
             max_size_triangular=max_size_triangular,
