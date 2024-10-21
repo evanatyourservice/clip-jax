@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from functools import partial
 from platform import python_version
-from pprint import pformat, pprint
+from pprint import pformat
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 import flax
@@ -474,7 +474,7 @@ class DataTrainingArguments:
         metadata={"help": ("The maximum aspect ratio of each original image from training set.")},
     )
     seed_dataset: Optional[int] = field(
-        default=42,
+        default=None,
         metadata={"help": "The seed used to augment the dataset."},
     )
     format: Optional[str] = field(default="rgb", metadata={"help": "The format of the images (rgb or lab)."})
@@ -1279,10 +1279,6 @@ def main():
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
         params_specs = trainable_params(params_spec, training_args)
 
-        if jax.process_index() == 0:
-            print("params sharding specs:")
-            pprint(params_specs, width=100)
-
         # can just explicitly set everything, opt state should be tuple where one
         # entry is scale_by_kron.
         psgd_idx = 0
@@ -1351,9 +1347,6 @@ def main():
         psgd_full_specs = [PartitionSpec()] * len(opt_state_shapes)
         psgd_full_specs[psgd_idx] = psgd_specs
         psgd_full_specs = tuple(psgd_full_specs)
-        if jax.process_index() == 0:
-            print("PSGD sharding specs:")
-            pprint(psgd_full_specs, width=100)
         return psgd_full_specs
 
     if training_args.optim == "kron":
