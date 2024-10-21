@@ -298,6 +298,19 @@ def scale_by_kron(
         # trust region
         precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 2) * 2, precond_gs)
 
+        # print metrics
+        jax.lax.cond(
+            count_inc % 25 == 0,
+            lambda: jax.debug.print(
+                "abs(x) {abs:.8e} x^2 {x2:.8e} x^4 {x4:.8e} max {max:.8e}",
+                abs=jnp.array([jnp.mean(jnp.abs(x)) for x in precond_gs]).mean(),
+                x2=jnp.array([jnp.mean(jnp.abs(x) ** 2) for x in precond_gs]).mean(),
+                x4=jnp.array([jnp.mean(jnp.abs(x) ** 4) for x in precond_gs]).mean(),
+                max=jnp.array([jnp.max(jnp.abs(x)) for x in precond_gs]).max(),
+            ),
+            lambda: None,
+        )
+
         # box preconditioned grads
         if flax_partitioned:
             precond_gs = [
