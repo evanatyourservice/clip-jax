@@ -369,6 +369,7 @@ def kron(
         optax.GradientTransformationExtraArgs
     """
     optimizer = [
+        optax.clip_by_global_norm(1.0),
         scale_by_kron(
             preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
