@@ -369,7 +369,6 @@ def kron(
         optax.GradientTransformationExtraArgs
     """
     optimizer = [
-        optax.clip_by_global_norm(1.0),  # added for CapPa for train.py simplicity
         scale_by_kron(
             b1=b1,
             preconditioner_update_probability=preconditioner_update_probability,
