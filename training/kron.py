@@ -295,7 +295,7 @@ def scale_by_kron(
                 )
             ]
 
-        # trust region
+        # trust region (psgd centers x^2 at 1 so we pull >1 down to be less aggressive)
         precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 2) * 2, precond_gs)
 
         # box preconditioned grads
