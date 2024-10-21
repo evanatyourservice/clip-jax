@@ -382,10 +382,10 @@ def kron(
         optax.GradientTransformationExtraArgs
     """
     optimizer = [
+        optax.clip_by_global_norm(1.0),  # added for CapPa for train.py simplicity
         scale_by_kron(
-            optax.clip_by_global_norm(1.0),
-            preconditioner_update_probability=preconditioner_update_probability,
             b1=b1,
+            preconditioner_update_probability=preconditioner_update_probability,
             max_size_triangular=max_size_triangular,
             max_skew_triangular=max_skew_triangular,
             min_ndim_triangular=min_ndim_triangular,
