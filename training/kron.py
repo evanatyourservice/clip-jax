@@ -7,7 +7,6 @@ import jax
 from jax import vmap
 import jax.numpy as jnp
 import flax.linen as nn
-import optax
 from optax import tree_utils as otu
 from optax._src import base, transform
 from optax._src.numerics import safe_int32_increment
@@ -296,8 +295,10 @@ def scale_by_kron(
             ]
 
         # trust region
-        # (psgd centers x^2 at 1 so we pull >1 down to be less aggressive in reality)
-        precond_gs = jax.tree.map(lambda x: jnp.tanh(x / 2) * 2, precond_gs)
+        trust_region_scale = 1.5
+        precond_gs = jax.tree.map(
+            lambda x: jnp.tanh(x / trust_region_scale) * trust_region_scale, precond_gs
+        )
 
         # box preconditioned grads
         if flax_partitioned:
