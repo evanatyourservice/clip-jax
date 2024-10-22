@@ -25,7 +25,7 @@ def precond_update_prob_schedule(
 
     This schedule is an exponential anneal with a flat start. Default settings keep
     update probability at 1.0 for 250 steps then exponentially anneal down to
-    `min_prob` by 4000 steps. Default settings work well for most models and 
+    `min_prob` by 4000 steps. Default settings work well for most models and
     training regimes.
     """
 
@@ -49,8 +49,8 @@ def scale_by_kron(
     memory_save_mode: Optional[str] = None,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: str = "tensorfloat32",
-    precond_grads_precision: str = "bfloat16",
+    precond_update_precision: Optional[str] = "tensorfloat32",
+    precond_grads_precision: Optional[str] = None,
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
@@ -65,7 +65,7 @@ def scale_by_kron(
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
         min_ndim_triangular: int, minimum number of dimensions a layer needs to have
             triangular preconditioners.
-        memory_save_mode: optional str, None, 'one_diag', or 'all_diag', None is default 
+        memory_save_mode: optional str, None, 'one_diag', or 'all_diag', None is default
             to set all preconditioners to be triangular, 'one_diag' sets the largest
             or last dim to be diagonal per layer, and 'all_diag' sets all preconditioners
             to be diagonal.
@@ -337,8 +337,8 @@ def kron(
     memory_save_mode: Optional[str] = None,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
-    precond_update_precision: str = "tensorfloat32",
-    precond_grads_precision: str = "bfloat16",
+    precond_update_precision: Optional[str] = "tensorfloat32",
+    precond_grads_precision: Optional[str] = None,
     scanned_layers: Optional[base.Params] = None,
     lax_map_scanned_layers: bool = False,
     lax_map_batch_size: int = 8,
@@ -357,7 +357,7 @@ def kron(
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
         min_ndim_triangular: int, minimum number of dimensions a layer needs to have
             triangular preconditioners.
-        memory_save_mode: optional str, None, 'one_diag', or 'all_diag', None is default 
+        memory_save_mode: optional str, None, 'one_diag', or 'all_diag', None is default
             to set all preconditioners to be triangular. 'one_diag' sets only the largest
             or last dim in a layer to be diagonal, and 'all_diag' sets all preconditioners
             to be diagonal.
@@ -477,6 +477,11 @@ def _init_Q_exprs(
             dim_diag[rev_sorted_dims[0]] = True
         elif memory_save_mode == "all_diag":
             dim_diag = [True for _ in shape]
+        else:
+            raise ValueError(
+                f"Invalid memory_save_mode: {memory_save_mode}, must be one of "
+                "[None, 'one_diag', 'all_diag']"
+            )
 
         Q = [] if existing_Q is None else existing_Q
         piece1A, piece2A, piece3A = ([], "", "")
