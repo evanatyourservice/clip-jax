@@ -17,8 +17,6 @@ dependencies = [
     "transformers",
     "aqtp",
     "wandb",
-    "psgd-jax",
-    "precondition-opt",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +24,7 @@ dev = [
     "optax",
     "precondition-opt",
     "tqdm",
+    "psgd-jax",
 ]
 
 [tool.hatch.version]

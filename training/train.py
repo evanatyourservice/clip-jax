@@ -35,7 +35,7 @@ from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from PIL import Image
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
-from kron import kron, precond_update_prob_schedule
+from psgd_jax.kron import kron, precond_update_prob_schedule
 from tqdm import tqdm
 from transformers import HfArgumentParser
 
@@ -124,7 +124,6 @@ class TrainingArguments:
         metadata={"help": ('The optimizer to use. Can be "distributed_shampoo" (default), "kron", "adam" or "adafactor"')},
     )
     weight_decay: float = field(default=0.0, metadata={"help": "Weight decay applied to parameters."})
-    l2_reg: float = field(default=1e-12, metadata={"help": "L2 regularization added to the loss."})
     beta1: float = field(
         default=0.9,
         metadata={"help": "Beta1 for Adam & Distributed Shampoo."},
@@ -1555,18 +1554,6 @@ def main():
                 loss = sigmoid_loss(outputs)
             else:
                 raise NotImplementedError
-            
-            loss_logging = loss
-
-            if training_args.l2_reg > 0 and train:
-                l2_reg = sum(
-                    jnp.sum(jnp.square(p))
-                    for p in jax.tree.leaves(trainable_params(params, training_args))
-                )
-                loss += l2_reg * training_args.l2_reg
-            
-            if train:
-                return loss, loss_logging
             return loss
 
     # Define gradient update step fn
@@ -1584,7 +1571,7 @@ def main():
             return jax.tree_util.tree_map(lambda x: jax.lax.dynamic_slice_in_dim(x, offset, length), batch)
 
         train_compute_loss = partial(compute_loss, train=True)
-        grad_fn = jax.value_and_grad(train_compute_loss, has_aux=True)
+        grad_fn = jax.value_and_grad(train_compute_loss)
 
         def loss_and_grad(grad_idx, dropout_rng):
             # minibatch at grad_idx for gradient accumulation (None otherwise)
@@ -1594,7 +1581,7 @@ def main():
             # only 1 single rng per grad step, let us handle larger batch size (not sure why)
             dropout_rng, _ = jax.random.split(dropout_rng)
             # get loss and grads
-            (_, loss), grads = grad_fn(params, minibatch, dropout_rng, model)
+            loss, grads = grad_fn(params, minibatch, dropout_rng, model)
             # ensure grads are sharded
             grads = with_sharding_constraint(grads, params_spec)
             # return loss and grads
