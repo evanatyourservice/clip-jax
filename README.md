@@ -23,8 +23,8 @@ For example:
 git clone https://github.com/evanatyourservice/clip-jax.git && \
 cd clip-jax && \
 pip install -U pip && \
-pip install -U -e '.[dev]' && \
-pip install --force-reinstall --upgrade --no-cache-dir 'jax[tpu]' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html && \
+pip install -e '.[dev]' && \
+pip install --force-reinstall --upgrade --no-cache-dir 'jax[tpu]==0.4.34' -f https://storage.googleapis.com/jax-releases/libtpu_releases.html flax==0.10.0 && \
 pip install 'numpy<2'
 ```
 
