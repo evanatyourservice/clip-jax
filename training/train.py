@@ -1394,20 +1394,20 @@ def main():
             params = trainable_params(params, training_args)
             updates, new_opt_state = optimizer.update(grads, opt_state, params)
             new_params = optax.apply_updates(params, updates)
-            return new_params, new_opt_state
-        grads = split_scanned_params(trainable_params(grads, training_args))
-        split_params = split_scanned_params(trainable_params(params, training_args))
-        new_opt_state = {}
-        new_params = {}
-        for k, param in split_params.items():
-            update_fn = optimizer[k].update
-            if "scanned_maxtext" in k:
-                update_fn = jax.vmap(update_fn, in_axes=(1, 0, 1), out_axes=(1, 0))
-            elif ("scanned_text" in k) or ("scanned_vision" in k):
-                update_fn = jax.vmap(update_fn, in_axes=(0, 0, 0), out_axes=(0, 0))
-            updates, new_opt_state[k] = update_fn(grads[k], opt_state[k], param)
-            new_params[k] = optax.apply_updates(param, updates)
-        new_params = unsplit_scanned_params(new_params)
+        else:
+            grads = split_scanned_params(trainable_params(grads, training_args))
+            split_params = split_scanned_params(trainable_params(params, training_args))
+            new_opt_state = {}
+            new_params = {}
+            for k, param in split_params.items():
+                update_fn = optimizer[k].update
+                if "scanned_maxtext" in k:
+                    update_fn = jax.vmap(update_fn, in_axes=(1, 0, 1), out_axes=(1, 0))
+                elif ("scanned_text" in k) or ("scanned_vision" in k):
+                    update_fn = jax.vmap(update_fn, in_axes=(0, 0, 0), out_axes=(0, 0))
+                updates, new_opt_state[k] = update_fn(grads[k], opt_state[k], param)
+                new_params[k] = optax.apply_updates(param, updates)
+            new_params = unsplit_scanned_params(new_params)
         # merge with non-trainable params
         # NOTE: this is only for future compatibility if we want to train only certain parameters
         params, new_params = flatten_dict(params), flatten_dict(new_params)
