@@ -1391,9 +1391,9 @@ def main():
     def update_params(params, opt_state, grads):
         if training_args.optim == "kron":
             grads = trainable_params(grads, training_args)
-            params = trainable_params(params, training_args)
-            updates, new_opt_state = optimizer.update(grads, opt_state, params)
-            new_params = optax.apply_updates(params, updates)
+            new_params = trainable_params(params, training_args)
+            updates, new_opt_state = optimizer.update(grads, opt_state, new_params)
+            new_params = optax.apply_updates(new_params, updates)
         else:
             grads = split_scanned_params(trainable_params(grads, training_args))
             split_params = split_scanned_params(trainable_params(params, training_args))
