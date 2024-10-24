@@ -142,6 +142,10 @@ class TrainingArguments:
         default=1024,
         metadata={"help": "Chunked size for large layers with Distributed Shampoo."},
     )
+    kron_mem_save_mode: Optional[str] = field(
+        default=None,
+        metadata={"help": "Kron memory save mode, can be None, 'one_diag', or 'all_diag'."},
+    )
     caspr_variant: bool = field(
         default=False,
         metadata={"help": "Use CASPR variant of Distributed Shampoo."},
@@ -1160,6 +1164,7 @@ def main():
                 min_prob=1 / training_args.preconditioning_compute_steps,
             ),
             max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
+            memory_save_mode=training_args.kron_mem_save_mode,
             scanned_layers=scanned_params_bool(trainable_params(params, training_args)),
         )
 
