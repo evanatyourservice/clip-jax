@@ -35,7 +35,7 @@ from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from PIL import Image
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
-from psgd_jax.kron import scale_by_kron, precond_update_prob_schedule
+from kron import scale_by_kron, precond_update_prob_schedule
 from tqdm import tqdm
 from transformers import HfArgumentParser
 
@@ -145,6 +145,10 @@ class TrainingArguments:
     kron_mem_save_mode: Optional[str] = field(
         default=None,
         metadata={"help": "Kron memory save mode, can be None, 'one_diag', or 'all_diag'."},
+    )
+    kron_merge_small_dims: bool = field(
+        default=False,
+        metadata={"help": "Merge small dimensions for Kron."},
     )
     caspr_variant: bool = field(
         default=False,
@@ -1168,6 +1172,7 @@ def main():
                 scanned_layers=scanned_params_bool(
                     trainable_params(params, training_args)
                 ),
+                merge_small_dims=training_args.kron_merge_small_dims,
             ),
         ]
         if training_args.weight_decay > 0.0:
