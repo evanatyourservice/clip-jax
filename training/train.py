@@ -35,7 +35,7 @@ from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from PIL import Image
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
-from psgd_jax.kron import kron, precond_update_prob_schedule
+from psgd_jax.kron import scale_by_kron, precond_update_prob_schedule
 from tqdm import tqdm
 from transformers import HfArgumentParser
 
@@ -1156,17 +1156,24 @@ def main():
             raise NotImplementedError("PSGD not supported for MaxText")
         # psgd kron handles scanned layers internally so we pass in a tree of booleans
         # indicating which layers to scan
-        optimizer = kron(
-            learning_rate=learning_rate_fn,
-            b1=training_args.beta1,
-            weight_decay=training_args.weight_decay,
-            preconditioner_update_probability=precond_update_prob_schedule(
-                min_prob=1 / training_args.preconditioning_compute_steps,
+        _opt = [
+            optax.clip_by_global_norm(1.0),
+            scale_by_kron(
+                b1=training_args.beta1,
+                preconditioner_update_probability=precond_update_prob_schedule(
+                    min_prob=1 / training_args.preconditioning_compute_steps
+                ),
+                max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
+                memory_save_mode=training_args.kron_mem_save_mode,
+                scanned_layers=scanned_params_bool(
+                    trainable_params(params, training_args)
+                ),
             ),
-            max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
-            memory_save_mode=training_args.kron_mem_save_mode,
-            scanned_layers=scanned_params_bool(trainable_params(params, training_args)),
-        )
+        ]
+        if training_args.weight_decay > 0.0:
+            _opt.append(optax.add_decayed_weights(training_args.weight_decay))
+        _opt.append(optax.scale_by_learning_rate(learning_rate_fn))
+        optimizer = optax.chain(*_opt)
 
     elif training_args.optim == "adam":
         _opt = partial(
