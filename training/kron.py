@@ -317,7 +317,7 @@ def scale_by_kron(
             ]
 
         # trust region
-        trust_region_scale = 2.0
+        trust_region_scale = 1.5
         precond_gs = jax.tree.map(
             lambda x: jnp.tanh(x / trust_region_scale) * trust_region_scale, precond_gs
         )
