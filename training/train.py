@@ -35,7 +35,7 @@ from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from PIL import Image
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
-from kron import scale_by_kron, precond_update_prob_schedule
+from kron_old import scale_by_kron, precond_update_prob_schedule
 from tqdm import tqdm
 from transformers import HfArgumentParser
 
