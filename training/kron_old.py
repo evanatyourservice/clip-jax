@@ -208,6 +208,14 @@ def scale_by_kron(
         if isinstance(preconditioner_update_probability, Callable):
             update_prob_in = preconditioner_update_probability(count_inc)
 
+        # norm grads to unit norm layer-wise
+        def norm_grad(x):
+            norm = jnp.linalg.norm(x)
+            norm = jnp.where(norm == 0, 1.0, norm)
+            return x / norm
+
+        updates = jax.tree.map(norm_grad, updates)
+
         # momentum
         mu = None
         momentum_updates = updates

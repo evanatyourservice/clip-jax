@@ -1161,7 +1161,7 @@ def main():
         # psgd kron handles scanned layers internally so we pass in a tree of booleans
         # indicating which layers to scan
         _opt = [
-            optax.clip_by_global_norm(1.0),
+            # optax.clip_by_global_norm(1.0),
             scale_by_kron(
                 b1=training_args.beta1,
                 preconditioner_update_probability=precond_update_prob_schedule(
