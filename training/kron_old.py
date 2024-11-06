@@ -324,7 +324,14 @@ def scale_by_kron(
             ]
 
         # trust region
-        precond_gs = jax.tree.map(a_law_compress, precond_gs)
+        trust_region_scale = 1.5
+        trust_region_fn = lambda x: 0.1 * jnp.sign(x) * jnp.log(
+            jnp.abs(x) + 1
+        ) + 0.9 * jnp.tanh(x)
+        precond_gs = jax.tree.map(
+            lambda x: trust_region_fn(x / trust_region_scale) * trust_region_scale,
+            precond_gs,
+        )
 
         # un-merge dimensions
         if merge_small_dims:
@@ -435,15 +442,6 @@ def kron(
 
 def _add_tiny(x):
     return x + jnp.finfo(x.dtype).tiny
-
-
-def a_law_compress(x, A=87.6):
-    x_abs = jnp.abs(x)
-    mask = x_abs < 1 / A
-    compressed = jnp.where(
-        mask, A * x_abs / (1 + jnp.log(A)), (1 + jnp.log(A * x_abs)) / (1 + jnp.log(A))
-    )
-    return jnp.sign(x) * compressed
 
 
 def _norm_lower_bound(A: jax.Array):
