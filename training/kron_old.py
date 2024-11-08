@@ -324,14 +324,7 @@ def scale_by_kron(
             ]
 
         # trust region
-        trust_region_scale = 1.5
-        trust_region_fn = lambda x: 0.1 * jnp.sign(x) * jnp.log(
-            jnp.abs(x) + 1
-        ) + 0.9 * jnp.tanh(x)
-        precond_gs = jax.tree.map(
-            lambda x: trust_region_fn(x / trust_region_scale) * trust_region_scale,
-            precond_gs,
-        )
+        precond_gs = jax.tree.map(trust_region, precond_gs)
 
         # un-merge dimensions
         if merge_small_dims:
@@ -442,6 +435,13 @@ def kron(
 
 def _add_tiny(x):
     return x + jnp.finfo(x.dtype).tiny
+
+
+def trust_region(x):
+    x /= 1.5
+    x = 0.1 * jnp.sign(x) * jnp.log(jnp.abs(x) + 1) + 0.9 * jnp.tanh(x)
+    x *= 1.5
+    return jnp.clip(x, -2, 2)
 
 
 def _norm_lower_bound(A: jax.Array):
