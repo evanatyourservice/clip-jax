@@ -818,6 +818,10 @@ def main():
     params_spec = nn.logical_to_mesh(logical_spec, rules)
     scan_spec = PartitionSpec(None)
 
+    # Start timing before compilation/training
+    logger.info("Starting compilation and training...")
+    compile_start_time = time.perf_counter()
+
     # Create mesh
     logger.info(f"Creating a mesh of ({training_args.dp_devices}, {training_args.mp_devices})")
     dev_mesh = create_device_mesh((training_args.dp_devices, training_args.mp_devices))
@@ -1456,6 +1460,11 @@ def main():
         metrics = {**metrics_loss, **metrics_grads}
         if jax.process_index() == 0:
             state.log(metrics)
+
+    # End timing after training completes
+    compile_end_time = time.perf_counter()
+    total_compile_time = compile_end_time - compile_start_time
+    logger.info(f"Total compilation and training time: {total_compile_time:.2f} seconds ({total_compile_time/60:.2f} minutes)")
 
 
 if __name__ == "__main__":
