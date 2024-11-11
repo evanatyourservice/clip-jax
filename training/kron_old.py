@@ -235,6 +235,10 @@ def scale_by_kron(
                 _merge_dims(p[0] if s else p)
                 for p, s in zip(momentum_updates, scanned_layers_)
             ]
+            updates = [
+                map_fn(s, r[0], p)
+                for s, r, p in zip(scanned_layers_, reshapers, updates)
+            ]
             momentum_updates = [
                 map_fn(s, r[0], p)
                 for s, r, p in zip(scanned_layers_, reshapers, momentum_updates)
@@ -284,10 +288,14 @@ def scale_by_kron(
                 do_balances = jax.random.uniform(subkey) < 0.01
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
 
+                precond_update_in = jax.tree.map(
+                    lambda u, m: (u + m) / 2, updates, momentum_updates
+                )
+
                 # form conjB
                 conjBs = [
                     map_fn(s, _conjB, Q, g, v)
-                    for s, Q, g, v in zip(scanned_layers_, Qs, momentum_updates, Vs)
+                    for s, Q, g, v in zip(scanned_layers_, Qs, precond_update_in, Vs)
                 ]
 
                 # update Qs
@@ -302,7 +310,7 @@ def scale_by_kron(
                         conjb,
                     )
                     for s, exprs, Q, g, conjb in zip(
-                        scanned_layers_, expressions, Qs, momentum_updates, conjBs
+                        scanned_layers_, expressions, Qs, precond_update_in, conjBs
                     )
                 ]
                 return new_Qs
