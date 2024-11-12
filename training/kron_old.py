@@ -754,10 +754,12 @@ def transform_gradients(x: jax.Array) -> jax.Array:
         med = jnp.median(x)
         scale = jnp.median(jnp.abs(x - med)) * 1.4826 + 1e-12
         return med + scale * ((x - med) / scale) / (
-            1.0 + jnp.abs((x - med) / (scale * 3.0))
+            1.0 + jnp.abs((x - med) / (scale * 2.0))
         )
 
-    return jax.lax.cond(kurt > 5.0, transform, lambda x: x, x)
+    # Replace hard threshold with smooth sigmoid transition
+    alpha = jax.nn.sigmoid((kurt - 4.0) / 0.25)
+    return alpha * transform(x) + (1 - alpha) * x
 
 
 def compute_direction_change(x_before, x_after):
