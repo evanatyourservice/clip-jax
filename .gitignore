@@ -159,3 +159,5 @@ cc3m/
 wandb/
 jax_cache/
 data/
+scratch/
+*.png

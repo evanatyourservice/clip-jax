@@ -199,6 +199,8 @@ def scale_by_kron(
             flax_partitioned = True
             updates = [u.unbox() for u in boxed_updates]
             updates = grads_structure.unflatten(updates)
+        
+        updates = jax.tree.map(transform_gradients, updates)
 
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
@@ -207,14 +209,6 @@ def scale_by_kron(
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
             update_prob_in = preconditioner_update_probability(count_inc)
-
-        # norm grads to unit norm layer-wise
-        def norm_grad(x):
-            norm = jnp.linalg.norm(x)
-            norm = jnp.where(norm == 0, 1.0, norm)
-            return x / norm
-
-        updates = jax.tree.map(norm_grad, updates)
 
         # momentum
         mu = None
@@ -288,9 +282,7 @@ def scale_by_kron(
                 do_balances = jax.random.uniform(subkey) < 0.01
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
 
-                precond_update_in = jax.tree.map(
-                    lambda u, m: (u + m) / 2, updates, momentum_updates
-                )
+                precond_update_in = momentum_updates
 
                 # form conjB
                 conjBs = [
@@ -332,7 +324,7 @@ def scale_by_kron(
             ]
 
         # trust region
-        precond_gs = jax.tree.map(trust_region, precond_gs)
+        # precond_gs = jax.tree.map(trust_region, precond_gs)
 
         # un-merge dimensions
         if merge_small_dims:
@@ -350,6 +342,15 @@ def scale_by_kron(
         # unflatten pytrees
         new_updates = grads_structure.unflatten(precond_gs)
         Qs = grads_structure.unflatten(Qs)
+
+        # measure energy (x^2)
+        energy = jax.tree_map(lambda x: jnp.mean(x**2), new_updates)
+        energy = sum(jax.tree.leaves(energy)) / len(jax.tree.leaves(energy))
+        jax.lax.cond(
+            count_inc % 1000 == 0,
+            lambda: jax.debug.print("Energy: {energy}", energy=energy),
+            lambda: None,
+        )
 
         # dtypes and new state
         mu = otu.tree_cast(mu, mu_dtype)
@@ -740,3 +741,154 @@ def _merge_dims(arr: jax.Array) -> tuple:
                 lambda v, permute=q, shape=opt_s: v.reshape(shape).transpose(permute),
                 mtx_shape,
             )
+
+
+def transform_gradients(x: jax.Array) -> jax.Array:
+    if x.size <= 4:
+        return x
+
+    x2 = x * x
+    kurt = jnp.mean(x2 * x2) / (jnp.mean(x2) ** 2)
+
+    def transform(x):
+        med = jnp.median(x)
+        scale = jnp.median(jnp.abs(x - med)) * 1.4826 + 1e-12
+        return med + scale * ((x - med) / scale) / (
+            1.0 + jnp.abs((x - med) / (scale * 3.0))
+        )
+
+    return jax.lax.cond(kurt > 5.0, transform, lambda x: x, x)
+
+
+def compute_direction_change(x_before, x_after):
+    """Calculate cosine similarity and angle between before/after vectors."""
+    norm_before = jnp.sqrt(jnp.sum(x_before * x_before) + 1e-8)
+    norm_after = jnp.sqrt(jnp.sum(x_after * x_after) + 1e-8)
+    cos_sim = jnp.sum(x_before * x_after) / (norm_before * norm_after)
+    angle_degrees = jnp.arccos(jnp.clip(cos_sim, -1.0, 1.0)) * 180 / jnp.pi
+    return float(cos_sim), float(angle_degrees)
+
+
+if __name__ == "__main__":
+    def test_optimizer_and_distributions():
+        """Test the optimizer with different momentum values and input distributions."""
+        print("\nTesting Optimizer:")
+        # Test parameters
+        N = 64
+        betas = [0.0, 0.9]
+        steps = 4000
+        
+        # Add scale test distribution
+        distributions = {
+            "normal": lambda key: jax.random.normal(key, (N, N)),
+            "uniform": lambda key: jax.random.uniform(key, (N, N), minval=-2, maxval=2),
+            "laplace": lambda key: jax.random.laplace(key, (N, N)),
+            "student_t": lambda key: jax.random.t(key, 3.0, (N, N)),
+            "cauchy": lambda key: jax.random.cauchy(key, (N, N)),
+        }
+
+        for dist_name, dist_fn in distributions.items():
+            print(f"\n=== Testing {dist_name.upper()} gradients ===")
+
+            for beta in betas:
+                print(f"\nMomentum beta={beta}")
+
+                # Initialize state
+                key = jax.random.PRNGKey(42)
+                params = {"weight": jax.random.normal(key, (N, N))}
+                opt = scale_by_kron(b1=beta)
+                state = opt.init(params)
+
+                @jax.jit
+                def update_step(params, state, key):
+                    key, subkey = jax.random.split(key)
+                    grad = {"weight": dist_fn(subkey)}  # Use distribution-specific gradient
+                    updates, new_state = opt.update(grad, state, params)
+                    
+                    # Print stats every 1000 steps
+                    jax.lax.cond(
+                        new_state["count"] % 1000 == 0,
+                        lambda: jax.debug.print(
+                            "Step: {step}, Energy: {energy:.4f}",
+                            step=new_state["count"],
+                            energy=jax.tree_map(lambda x: jnp.mean(x**2), updates)["weight"]
+                        ),
+                        lambda: None
+                    )
+                    
+                    return updates, new_state, key
+
+                # Run updates
+                for _ in range(steps):
+                    updates, state, key = update_step(params, state, key)
+                    params = jax.tree.map(lambda p, u: p - u, params, updates)
+
+                # Print final stats
+                print(f"\nFinal Statistics:")
+                print(f"Energy: {jax.tree_map(lambda x: jnp.mean(x**2), updates)['weight']:.4f}")
+                
+                # Print condition numbers
+                Qs = state["Qs_preconditioners"]["weight"]
+                for idx, Q in enumerate(Qs):
+                    P = Q.T @ Q
+                    s = jnp.linalg.svd(P, compute_uv=False)
+                    condition_number = s[0] / s[-1]
+                    print(f"Q{idx} condition number: {condition_number:.4f}")
+
+        print("\nTesting Distribution Transforms:")
+        # Generate test distributions
+        key = jax.random.PRNGKey(42)
+        N = 10000
+        key, *subkeys = jax.random.split(key, 6)
+        test_distributions = {
+            "normal": jax.random.normal(subkeys[0], (N,)),
+            "uniform": jax.random.uniform(subkeys[1], (N,), minval=-2, maxval=2),
+            "laplace": jax.random.laplace(subkeys[2], (N,)),
+            "student_t": jax.random.t(subkeys[3], 3.0, (N,)),
+            "cauchy": jax.random.cauchy(subkeys[4], (N,)),
+        }
+        
+        def compute_stats(x):
+            """Calculate distribution statistics."""
+            centered = x - jnp.mean(x)
+            var = jnp.mean(centered**2)
+            kurt = jnp.mean(centered**4) / (var**2)
+            p99, p50 = jnp.percentile(jnp.abs(x), jnp.array([99, 50]))
+            return {
+                "mean": float(jnp.mean(x)),
+                "std": float(jnp.std(x)),
+                "range": [float(jnp.min(x)), float(jnp.max(x))],
+                "kurtosis": float(kurt),
+                "tail_ratio": float(p99 / (p50 + 1e-8))
+            }
+        
+        # Test each distribution
+        for name, data in test_distributions.items():
+            transformed = transform_gradients(data)
+            before = compute_stats(data)
+            after = compute_stats(transformed)
+            
+            print(f"\n{name.upper()} Distribution:")
+            print("Before transformation:")
+            print(f"  Mean: {before['mean']:.3f}")
+            print(f"  Std: {before['std']:.3f}")
+            print(f"  Range: [{before['range'][0]:.3f}, {before['range'][1]:.3f}]")
+            print(f"  Kurtosis: {before['kurtosis']:.3f}")
+            print(f"  Tail ratio (p99/p50): {before['tail_ratio']:.3f}")
+            
+            print("After transformation:")
+            print(f"  Mean: {after['mean']:.3f}")
+            print(f"  Std: {after['std']:.3f}")
+            print(f"  Range: [{after['range'][0]:.3f}, {after['range'][1]:.3f}]")
+            print(f"  Kurtosis: {after['kurtosis']:.3f}")
+            print(f"  Tail ratio (p99/p50): {after['tail_ratio']:.3f}")
+
+        print("\nTesting Direction Preservation:")
+        for name, data in test_distributions.items():
+            transformed = transform_gradients(data)
+            cos_sim, angle = compute_direction_change(data, transformed)
+            print(f"\n{name.upper()} Distribution:")
+            print(f"  Cosine similarity: {cos_sim:.4f}")
+            print(f"  Angle change: {angle:.2f}°")
+
+    test_optimizer_and_distributions()
