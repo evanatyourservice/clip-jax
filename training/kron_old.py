@@ -203,7 +203,7 @@ def scale_by_kron(
         def norm_grads(x):
             norm = jnp.linalg.norm(x)
             norm = jnp.where(norm == 0, 1, norm)
-            return jnp.tanh(x / norm / 3.0) * 3.0
+            return x / norm  # jnp.tanh(x / norm / 3.0) * 3.0
 
         updates = jax.tree.map(norm_grads, updates)
 
