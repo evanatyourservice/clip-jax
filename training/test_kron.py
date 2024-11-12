@@ -23,7 +23,7 @@ from jax.experimental.mesh_utils import create_device_mesh
 from jax.experimental.pjit import pjit
 from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, PartitionSpec
-from kron_old import precond_update_prob_schedule, scale_by_kron
+from kron import precond_update_prob_schedule, scale_by_kron
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 from tqdm import tqdm
 from transformers import HfArgumentParser
