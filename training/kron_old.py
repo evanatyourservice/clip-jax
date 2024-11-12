@@ -199,13 +199,6 @@ def scale_by_kron(
             flax_partitioned = True
             updates = [u.unbox() for u in boxed_updates]
             updates = grads_structure.unflatten(updates)
-        
-        def norm_grads(x):
-            norm = jnp.linalg.norm(x)
-            norm = jnp.where(norm == 0, 1, norm)
-            return x / norm  # jnp.tanh(x / norm / 3.0) * 3.0
-
-        updates = jax.tree.map(norm_grads, updates)
 
         scanned_layers_ = scanned_layers
         if scanned_layers is None:
@@ -320,6 +313,14 @@ def scale_by_kron(
         )
 
         # precondition gradients
+        def norm_grads(x):
+            norm = jnp.linalg.norm(x)
+            norm = jnp.where(norm == 0, 1, norm)
+            normed = x / norm
+            return jnp.tanh(normed / 3.0) * 3.0
+
+        momentum_updates = jax.tree.map(norm_grads, momentum_updates)
+
         with jax.default_matmul_precision(precond_grads_precision):
             precond_gs = [
                 map_fn(s, partial(_precond_grad, exprs=exprs), Q, g)
