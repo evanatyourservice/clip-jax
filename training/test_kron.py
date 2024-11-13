@@ -1061,13 +1061,15 @@ def main():
 
     # get PartitionSpec of optimizer state
     def get_opt_state_spec_psgd():
-        temp_params = trainable_params(logical_params)
-        opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
-        params_specs = trainable_params(params_spec)
+        temp_params = jax.tree.map(
+            lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
+            logical_params_for_opt
+        )
+        kron_opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
 
         # Find the kron state index
         psgd_idx = 0
-        for part in opt_state_shapes:
+        for part in kron_opt_state_shapes:
             if isinstance(part, dict):  # kron state is a dictionary
                 if "Qs_preconditioners" in part:
                     break
@@ -1099,7 +1101,7 @@ def main():
 
         opt_state_spec = jax.tree_util.tree_map(
             _to_spec,
-            opt_state_shapes,
+            kron_opt_state_shapes,
             is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
         )
 
@@ -1108,13 +1110,13 @@ def main():
         # Update the kron state specs
         if isinstance(opt_state_spec[psgd_idx], dict):
             kron_specs = {}
-            for k, v in opt_state_shapes[psgd_idx].items():
+            for k, v in kron_opt_state_shapes[psgd_idx].items():
                 if k == "count":
                     # Count is not sharded
                     kron_specs[k] = PartitionSpec()
                 elif k == "mu":
                     # Momentum matches params
-                    kron_specs[k] = params_specs
+                    kron_specs[k] = params_spec_for_opt
                 elif k == "Qs_preconditioners":
                     # Handle preconditioners (kept in lists)
                     precond_specs = jax.tree.map(
