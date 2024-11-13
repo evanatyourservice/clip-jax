@@ -1073,6 +1073,34 @@ def main():
         # Initialize optimizer with dummy arrays
         opt_state = optimizer.init(logical_params_for_opt)
         
+        # Find the kron state index
+        psgd_idx = 0
+        for part in opt_state:
+            if isinstance(part, dict):  # kron state is a dictionary
+                if "Qs_preconditioners" in part:
+                    break
+            psgd_idx += 1
+        
+        def shard_psgd_precond(Qs: list):
+            precond_specs = []
+            for precond in Qs:
+                shape = precond.shape
+                new_sharding = [None for _ in shape]
+                if (
+                    len(shape) < 2
+                    or (len(shape) == 2 and shape[-2] != shape[-1])
+                ):
+                    # Skip diagonal preconditioners - replicate them
+                    precond_specs.append(PartitionSpec(*new_sharding))
+                    continue
+                
+                # Shard if bigger than 0.1 MB and divisible by data devices
+                if (np.prod(shape) * precond.dtype.itemsize >= 0.1 * (2**20) 
+                    and shape[-2] % training_args.dp_devices == 0):
+                    new_sharding[-2] = "data"  # Only shard on dim -2 using data axis
+                precond_specs.append(PartitionSpec(*new_sharding))
+            return precond_specs
+
         # Convert optimizer state to specs
         def _to_spec(x):
             if isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState)):
@@ -1084,6 +1112,30 @@ def main():
             opt_state,
             is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
         )
+        
+        # Convert tuple to list for modification
+        opt_state_spec = list(opt_state_spec)
+        
+        # Update the kron state specs
+        if isinstance(opt_state_spec[psgd_idx], dict):
+            kron_specs = {}
+            for k, v in opt_state[psgd_idx].items():
+                if k == "count":
+                    # Count is not sharded
+                    kron_specs[k] = PartitionSpec()
+                elif k == "mu":
+                    # Momentum matches params
+                    kron_specs[k] = params_spec
+                elif k == "Qs_preconditioners":
+                    # Handle preconditioners (kept in lists)
+                    precond_specs = jax.tree.map(
+                        shard_psgd_precond, v, is_leaf=lambda x: isinstance(x, list)
+                    )
+                    kron_specs[k] = precond_specs
+            opt_state_spec[psgd_idx] = kron_specs
+        
+        # Convert back to tuple
+        opt_state_spec = tuple(opt_state_spec)
         
         return opt_state_spec
 
