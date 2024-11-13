@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
-from pprint import pformat
+from pprint import pformat, pprint
 from typing import Any, Callable, NamedTuple, Optional, Sequence, Tuple
 
 import flax
@@ -1213,6 +1213,11 @@ def main():
     # Set opt_state
     with mesh:
         opt_state = init_opt_state(params)
+        
+        # Pretty print optimizer state structure
+        if jax.process_index() == 0:
+            print("\nOptimizer state structure:")
+            pprint(jax.tree.map(lambda x: x.shape, opt_state))
 
     # Define update function
     def update_params(params, opt_state, grads):
