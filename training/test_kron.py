@@ -1061,7 +1061,11 @@ def main():
 
     # get PartitionSpec of optimizer state
     def get_opt_state_spec_psgd():
-        kron_opt_state_shapes = jax.eval_shape(optimizer.init, logical_params_for_opt)
+        temp_params = jax.tree.map(
+            lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
+            logical_params_for_opt
+        )
+        kron_opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
 
         # Find the kron state index
         psgd_idx = 0
