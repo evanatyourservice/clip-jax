@@ -1080,17 +1080,14 @@ def main():
                 if "Qs_preconditioners" in part:
                     break
             psgd_idx += 1
-        
+
         def shard_psgd_precond(Qs: list):
             precond_specs = []
             for precond in Qs:
                 shape = precond.shape
                 new_sharding = [None for _ in shape]
-                if (
-                    len(shape) < 2
-                    or (len(shape) == 2 and shape[-2] != shape[-1])
-                ):
-                    # TODO: hacky, fix
+                if len(shape) < 2 or shape[-2] != shape[-1]:
+                    # TODO: hacky, fix this
                     # Skip diagonal preconditioners - replicate them
                     precond_specs.append(PartitionSpec(*new_sharding))
                     continue
@@ -1114,7 +1111,6 @@ def main():
             is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
         )
         
-        # Convert tuple to list for modification
         opt_state_spec = list(opt_state_spec)
         
         # Update the kron state specs
@@ -1135,7 +1131,6 @@ def main():
                     kron_specs[k] = precond_specs
             opt_state_spec[psgd_idx] = kron_specs
         
-        # Convert back to tuple
         opt_state_spec = tuple(opt_state_spec)
         
         return opt_state_spec
