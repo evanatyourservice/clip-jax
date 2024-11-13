@@ -1036,10 +1036,13 @@ def main():
                 ),
                 max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
                 memory_save_mode=training_args.kron_mem_save_mode,
-                merge_small_dims=training_args.kron_merge_small_dims,
                 scanned_layers=scanned_layers_arg,
                 lax_map_scanned_layers=False,
                 lax_map_batch_size=8,
+                merge_small_dims=training_args.kron_merge_small_dims,
+                max_merged_dim_size=4096,
+                partition_grads_into_blocks=True,
+                block_size=128,
             ),
         ]
         if training_args.weight_decay > 0:
