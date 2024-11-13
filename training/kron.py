@@ -42,6 +42,7 @@ def precond_update_prob_schedule(
 
 def scale_by_kron(
     b1: float = 0.9,
+    normalize_grads: bool = False,
     preconditioner_update_probability: Union[
         float, Callable[[int], float]
     ] = precond_update_prob_schedule(),
@@ -65,6 +66,7 @@ def scale_by_kron(
 
     Args:
         b1: float, momentum parameter.
+        normalize_grads: bool, whether to normalize the incoming gradients.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
@@ -249,6 +251,15 @@ def scale_by_kron(
         update_prob_in = preconditioner_update_probability
         if isinstance(preconditioner_update_probability, Callable):
             update_prob_in = preconditioner_update_probability(count_inc)
+
+        # normalize grads
+        def norm_grads(g):
+            norm = jnp.linalg.norm(g)
+            norm = jnp.where(norm == 0, 1, norm)
+            return g / norm
+
+        if normalize_grads:
+            updates = jax.tree.map(norm_grads, updates)
 
         # momentum
         mu = None
@@ -472,6 +483,7 @@ def kron(
     b1: float = 0.9,
     weight_decay: float = 0.0,
     weight_decay_mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
+    normalize_grads: bool = False,
     preconditioner_update_probability: Union[
         float, Callable[[int], float]
     ] = precond_update_prob_schedule(),
@@ -499,6 +511,7 @@ def kron(
         weight_decay: float, weight decay.
         weight_decay_mask: optional Any or callable, pytree of bool same structure
             as params with weight decay applied to True elements.
+        normalize_grads: bool, whether to normalize the incoming gradients.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
@@ -535,6 +548,7 @@ def kron(
     optimizer = [
         scale_by_kron(
             b1=b1,
+            normalize_grads=normalize_grads,
             preconditioner_update_probability=preconditioner_update_probability,
             max_size_triangular=max_size_triangular,
             min_ndim_triangular=min_ndim_triangular,
