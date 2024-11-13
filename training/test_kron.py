@@ -1090,6 +1090,7 @@ def main():
                     len(shape) < 2
                     or (len(shape) == 2 and shape[-2] != shape[-1])
                 ):
+                    # TODO: hacky, fix
                     # Skip diagonal preconditioners - replicate them
                     precond_specs.append(PartitionSpec(*new_sharding))
                     continue
