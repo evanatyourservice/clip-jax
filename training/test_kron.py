@@ -38,7 +38,6 @@ class DataTrainingArguments:
     pass
 
 
-
 @dataclass
 class ModelArguments:
     pass
@@ -292,7 +291,6 @@ class TrainingArguments:
             f" (got {self.activation_partitioning_dims})."
         )
         self.dp_devices = jax.device_count() // self.mp_devices
-
 
 
 def flat_args(model_args, data_args, training_args):
@@ -841,7 +839,6 @@ def main():
     with mesh:
         params = init_params(params_rng)
 
-
     def trainable_params(data):
         valid_keys = None
         if training_args.trainable_params_mode == "encoder_warmup":
@@ -1064,18 +1061,13 @@ def main():
 
     # get PartitionSpec of optimizer state
     def get_opt_state_spec_psgd():
-        # Create dummy arrays for optimizer init
-        logical_params_for_opt = jax.tree_util.tree_map(
-            lambda x: jnp.zeros(x.shape, x.dtype),
-            logical_params
-        )
-        
-        # Initialize optimizer with dummy arrays
-        opt_state = optimizer.init(logical_params_for_opt)
-        
+        temp_params = trainable_params(logical_params, training_args)
+        opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
+        params_specs = trainable_params(params_spec, training_args)
+
         # Find the kron state index
         psgd_idx = 0
-        for part in opt_state:
+        for part in opt_state_shapes:
             if isinstance(part, dict):  # kron state is a dictionary
                 if "Qs_preconditioners" in part:
                     break
@@ -1091,7 +1083,7 @@ def main():
                     # Skip diagonal preconditioners - replicate them
                     precond_specs.append(PartitionSpec(*new_sharding))
                     continue
-                
+
                 # Shard if bigger than 0.1 MB and divisible by data devices
                 if (np.prod(shape) * precond.dtype.itemsize >= 0.1 * (2**20) 
                     and shape[-2] % training_args.dp_devices == 0):
@@ -1104,25 +1096,25 @@ def main():
             if isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState)):
                 return None
             return PartitionSpec(None) if x.ndim > 0 else PartitionSpec()
-        
+
         opt_state_spec = jax.tree_util.tree_map(
             _to_spec,
-            opt_state,
+            opt_state_shapes,
             is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
         )
-        
+
         opt_state_spec = list(opt_state_spec)
-        
+
         # Update the kron state specs
         if isinstance(opt_state_spec[psgd_idx], dict):
             kron_specs = {}
-            for k, v in opt_state[psgd_idx].items():
+            for k, v in opt_state_shapes[psgd_idx].items():
                 if k == "count":
                     # Count is not sharded
                     kron_specs[k] = PartitionSpec()
                 elif k == "mu":
                     # Momentum matches params
-                    kron_specs[k] = params_spec
+                    kron_specs[k] = params_specs
                 elif k == "Qs_preconditioners":
                     # Handle preconditioners (kept in lists)
                     precond_specs = jax.tree.map(
@@ -1130,9 +1122,9 @@ def main():
                     )
                     kron_specs[k] = precond_specs
             opt_state_spec[psgd_idx] = kron_specs
-        
+
         opt_state_spec = tuple(opt_state_spec)
-        
+
         return opt_state_spec
 
     def get_opt_state_spec():
@@ -1142,7 +1134,7 @@ def main():
             if "scanned" in k:
                 # Get the scan dimension from any parameter in p
                 scan_dim = jax.tree_util.tree_leaves(p)[0].shape[0]
-                
+
                 # Create shape info for a single layer by removing first dimension
                 p_shape = jax.tree_util.tree_map(
                     lambda x: jax.ShapeDtypeStruct(x.shape[1:], x.dtype), 
@@ -1235,6 +1227,7 @@ def main():
 
     if training_args.optim == "kron":
         opt_state_spec = get_opt_state_spec_psgd()
+        pprint(opt_state_spec, width=120)
     else:
         opt_state_spec = get_opt_state_spec()
 
@@ -1261,11 +1254,6 @@ def main():
     # Set opt_state
     with mesh:
         opt_state = init_opt_state(params)
-        
-        # Pretty print optimizer state structure
-        if jax.process_index() == 0:
-            print("\nOptimizer state structure:")
-            pprint(jax.tree.map(lambda x: x.shape, opt_state))
 
     # Define update function
     def update_params(params, opt_state, grads):
