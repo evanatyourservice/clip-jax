@@ -370,7 +370,7 @@ def scale_by_kron(
                     ]
 
                 key, subkey = jax.random.split(key)
-                do_balances = jax.random.uniform(subkey) <= 1.0  # TODO 0.01
+                do_balances = jax.random.uniform(subkey) <= 0.01
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
 
                 # form conjB
