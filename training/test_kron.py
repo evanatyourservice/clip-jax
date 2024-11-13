@@ -1061,9 +1061,9 @@ def main():
 
     # get PartitionSpec of optimizer state
     def get_opt_state_spec_psgd():
-        temp_params = trainable_params(logical_params, training_args)
+        temp_params = trainable_params(logical_params)
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
-        params_specs = trainable_params(params_spec, training_args)
+        params_specs = trainable_params(params_spec)
 
         # Find the kron state index
         psgd_idx = 0
