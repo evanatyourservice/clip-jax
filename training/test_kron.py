@@ -1034,7 +1034,7 @@ def main():
                 preconditioner_update_probability=precond_update_prob_schedule(
                     min_prob=1 / training_args.preconditioning_compute_steps,
                 ),
-                max_size_triangular=training_args.skip_preconditioning_dim_size_gt,
+                max_size_triangular=10000,
                 memory_save_mode=training_args.kron_mem_save_mode,
                 scanned_layers=scanned_layers_arg,
                 lax_map_scanned_layers=False,
