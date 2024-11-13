@@ -1144,7 +1144,7 @@ def main():
                 )
                 # Create dummy array for single layer
                 p_dummy = jax.tree_util.tree_map(
-                    lambda x: jnp.zeros(x.shape, x.dtype),
+                    lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
                     p_shape
                 )
                 # Get init shape for single layer
@@ -1158,7 +1158,7 @@ def main():
             else:
                 # For non-scanned layers, create dummy array
                 p_dummy = jax.tree_util.tree_map(
-                    lambda x: jnp.zeros(x.shape, x.dtype),
+                    lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
                     p
                 )
                 opt_state_shape[k] = optimizer[k].init(p_dummy)
