@@ -313,9 +313,9 @@ def scale_by_kron(
 
         # box preconditioned grads
         if flax_partitioned:
-            precond_gs_flat, gs_struct = jax.tree.flatten(precond_gs)
+            precond_gs, gs_struct = jax.tree.flatten(precond_gs)
             precond_gs = [
-                u.replace_boxed(pg) for u, pg in zip(boxed_updates, precond_gs_flat)
+                u.replace_boxed(pg) for u, pg in zip(boxed_updates, precond_gs)
             ]
             precond_gs = gs_struct.unflatten(precond_gs)
 
@@ -323,7 +323,7 @@ def scale_by_kron(
         Qs = otu.tree_cast(Qs, precond_dtype)
         state = dict(count=count_inc, mu=mu, nu=nu, Qs_preconditioners=Qs)
 
-        return updates, state
+        return precond_gs, state
 
     return base.GradientTransformationExtraArgs(init_fn, update_fn)
 
