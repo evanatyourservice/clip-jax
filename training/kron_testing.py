@@ -120,7 +120,7 @@ def scale_by_kron(
             scanned_layers_ = jax.tree.map(lambda _: False, params)
 
         # momentum
-        adam_state = optax.scale_by_adam(b2=0.95, mu_dtype=mu_dtype).init(params)
+        adam_state = optax.scale_by_adam(b1=b1, b2=0.95, mu_dtype=mu_dtype).init(params)
 
         # preconditioners
         Qs = [
@@ -309,7 +309,7 @@ def scale_by_kron(
         Qs = grads_structure.unflatten(Qs)
 
         # run adam
-        updates, adam_state = optax.scale_by_adam(b2=0.95, mu_dtype=mu_dtype).update(
+        updates, adam_state = optax.scale_by_adam(b1=b1, b2=0.95, mu_dtype=mu_dtype).update(
             updates, state["adam_state"], params
         )
 
