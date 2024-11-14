@@ -120,8 +120,8 @@ def scale_by_kron(
             scanned_layers_ = jax.tree.map(lambda _: False, params)
 
         # momentum
-        mu = jax.tree.map(jnp.zeros_like, params)
-        nu = jax.tree.map(jnp.zeros_like, params)
+        mu = jax.tree.map(jnp.zeros_like, jax.tree.leaves(params))
+        nu = jax.tree.map(jnp.zeros_like, jax.tree.leaves(params))
 
         # preconditioners
         Qs = [
@@ -298,6 +298,13 @@ def scale_by_kron(
         #     lambda x: jnp.clip(trust_region_fn(x / 1.5) * 1.5, -2, 2), precond_gs
         # )
 
+        # run adam
+        mu = otu.tree_update_moment(precond_gs, state["mu"], b1, 1)
+        nu = otu.tree_update_moment(precond_gs, state["nu"], 0.99, 2)
+        mu_hat = mu / (1 - b1 ** count_inc)
+        nu_hat = nu / (1 - 0.99 ** count_inc)
+        precond_gs = mu_hat / (jnp.sqrt(nu_hat) + 1e-8)
+
         # box preconditioned grads
         if flax_partitioned:
             precond_gs = [
@@ -307,13 +314,6 @@ def scale_by_kron(
         # unflatten pytrees
         updates = grads_structure.unflatten(precond_gs)
         Qs = grads_structure.unflatten(Qs)
-
-        # run adam
-        mu = otu.tree_update_moment(updates, state["mu"], b1, 1)
-        nu = otu.tree_update_moment(updates, state["nu"], 0.99, 2)
-        mu_hat = mu / (1 - b1 ** count_inc)
-        nu_hat = nu / (1 - 0.99 ** count_inc)
-        updates = mu_hat / (jnp.sqrt(nu_hat) + 1e-8)
 
         # dtypes and new state
         Qs = otu.tree_cast(Qs, precond_dtype)
