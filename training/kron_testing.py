@@ -120,7 +120,8 @@ def scale_by_kron(
             scanned_layers_ = jax.tree.map(lambda _: False, params)
 
         # momentum
-        adam_state = optax.scale_by_adam(b1=b1, b2=0.95, mu_dtype=mu_dtype).init(params)
+        mu = jax.tree.map(jnp.zeros_like, params)
+        nu = jax.tree.map(jnp.zeros_like, params)
 
         # preconditioners
         Qs = [
@@ -159,12 +160,11 @@ def scale_by_kron(
                 f"PSGD Preconditioners size: {Qs_n_elements} elements, "
                 f"{Qs_size_MB:.2f} MB"
             )
-        if adam_state.mu is not None:
-            mu_n_elements = sum([p.size for p in jax.tree.leaves(adam_state.mu)])
+        if mu is not None:
+            mu_n_elements = sum([p.size for p in jax.tree.leaves(mu)])
             mu_size_MB = sum(
                 [
-                    p.size * p.dtype.itemsize / (2**20)
-                    for p in jax.tree.leaves(adam_state.mu)
+                    p.size * p.dtype.itemsize / (2**20) for p in jax.tree.leaves(mu)
                 ]
             )
             if jax.process_index() == 0:
@@ -174,7 +174,7 @@ def scale_by_kron(
 
         # initial state
         return dict(
-            count=jnp.zeros([], jnp.int32), adam_state=adam_state, Qs_preconditioners=Qs
+            count=jnp.zeros([], jnp.int32), mu=mu, nu=nu, Qs_preconditioners=Qs
         )
 
     def update_fn(updates: base.Updates, state: dict, params: base.Params = None):
@@ -309,13 +309,15 @@ def scale_by_kron(
         Qs = grads_structure.unflatten(Qs)
 
         # run adam
-        updates, adam_state = optax.scale_by_adam(b1=b1, b2=0.95, mu_dtype=mu_dtype).update(
-            updates, state["adam_state"], params
-        )
+        mu = otu.tree_update_moment(updates, state["mu"], b1, 1)
+        nu = otu.tree_update_moment(updates, state["nu"], 0.99, 2)
+        mu_hat = mu / (1 - b1 ** count_inc)
+        nu_hat = nu / (1 - 0.99 ** count_inc)
+        updates = mu_hat / (jnp.sqrt(nu_hat) + 1e-8)
 
         # dtypes and new state
         Qs = otu.tree_cast(Qs, precond_dtype)
-        state = dict(count=count_inc, adam_state=adam_state, Qs_preconditioners=Qs)
+        state = dict(count=count_inc, mu=mu, nu=nu, Qs_preconditioners=Qs)
 
         return updates, state
 

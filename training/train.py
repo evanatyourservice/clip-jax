@@ -1350,6 +1350,9 @@ def main():
             elif k == "mu":
                 # momentum matches params
                 psgd_specs[k] = params_specs
+            elif k == "nu":
+                # second moment matches params
+                psgd_specs[k] = params_specs
             elif k == "Qs_preconditioners":
                 # preconditioners (kept in lists)
                 precond_specs = jax.tree.map(
