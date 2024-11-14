@@ -35,7 +35,7 @@ from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from PIL import Image
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
-from kron import scale_by_kron, precond_update_prob_schedule
+from kron_testing import scale_by_kron, precond_update_prob_schedule
 from tqdm import tqdm
 from transformers import HfArgumentParser
 
@@ -1172,7 +1172,7 @@ def main():
                 scanned_layers=scanned_params_bool(
                     trainable_params(params, training_args)
                 ),
-                merge_small_dims=training_args.kron_merge_small_dims,
+                # merge_small_dims=training_args.kron_merge_small_dims,
             ),
         ]
         if training_args.weight_decay > 0.0:
