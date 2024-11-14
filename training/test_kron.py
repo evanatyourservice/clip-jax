@@ -790,6 +790,9 @@ def main():
 
     with open("logical_params.pkl", "rb") as f:
         logical_params = pickle.load(f)
+    logical_params = jax.tree_util.tree_map(
+        lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype), logical_params
+    )
 
     # Parameter count
     num_params = {
@@ -1008,12 +1011,8 @@ def main():
         opt_fn = {}
         for k, p in split_scanned_params(trainable_params(logical_params)).items():
             if "scanned" in k:
-                # extract 1 layer shape by removing first dimension
-                p_shape = jax.tree_util.tree_map(
-                    lambda x: jax.ShapeDtypeStruct(x.shape[1:], x.dtype), 
-                    p
-                )
-                p = p_shape
+                # extract 1 layer
+                p = jax.eval_shape(lambda x: jax.tree_util.tree_map(lambda y: y[0], x), p)
             optimizer[k] = opt_unet.init(p) if "unet" in k else opt_encoder.init(p)
             opt_fn[k] = NamedTuple("opt_fn", pspec_fn=Any, shape_and_dtype_fn=Any)(
                 optimizer[k].pspec_fn, optimizer[k].shape_and_dtype_fn
@@ -1028,6 +1027,7 @@ def main():
             optax.clip_by_global_norm(1.0),
             scale_by_kron(
                 b1=training_args.beta1,
+                normalize_grads=True,
                 preconditioner_update_probability=precond_update_prob_schedule(
                     min_prob=1 / training_args.preconditioning_compute_steps,
                 ),
@@ -1040,6 +1040,8 @@ def main():
                 max_merged_dim_size=4096,
                 partition_grads_into_blocks=True,
                 block_size=128,
+                mesh=mesh,
+                axis_name="data",
             ),
         ]
         if training_args.weight_decay > 0:
@@ -1061,15 +1063,12 @@ def main():
 
     # get PartitionSpec of optimizer state
     def get_opt_state_spec_psgd():
-        temp_params = jax.tree.map(
-            lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
-            logical_params_for_opt
-        )
-        kron_opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
+        # a little different from above because psgd scans layers internally
+        opt_state_shapes = jax.eval_shape(optimizer.init, logical_params_for_opt)
 
         # Find the kron state index
         psgd_idx = 0
-        for part in kron_opt_state_shapes:
+        for part in opt_state_shapes:
             if isinstance(part, dict):  # kron state is a dictionary
                 if "Qs_preconditioners" in part:
                     break
@@ -1100,9 +1099,7 @@ def main():
             return PartitionSpec(None) if x.ndim > 0 else PartitionSpec()
 
         opt_state_spec = jax.tree_util.tree_map(
-            _to_spec,
-            kron_opt_state_shapes,
-            is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
+            _to_spec, opt_state_shapes, is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
         )
 
         opt_state_spec = list(opt_state_spec)
@@ -1110,7 +1107,7 @@ def main():
         # Update the kron state specs
         if isinstance(opt_state_spec[psgd_idx], dict):
             kron_specs = {}
-            for k, v in kron_opt_state_shapes[psgd_idx].items():
+            for k, v in opt_state_shapes[psgd_idx].items():
                 if k == "count":
                     # Count is not sharded
                     kron_specs[k] = PartitionSpec()
@@ -1134,40 +1131,19 @@ def main():
         opt_state_shape = {}
         for k, p in split_scanned_params(trainable_params(logical_params)).items():
             if "scanned" in k:
-                # Get the scan dimension from any parameter in p
-                scan_dim = jax.tree_util.tree_leaves(p)[0].shape[0]
-
-                # Create shape info for a single layer by removing first dimension
-                p_shape = jax.tree_util.tree_map(
-                    lambda x: jax.ShapeDtypeStruct(x.shape[1:], x.dtype), 
-                    p
-                )
-                # Create dummy array for single layer
-                p_dummy = jax.tree_util.tree_map(
-                    lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
-                    p_shape
-                )
-                # Get init shape for single layer
-                single_shape = optimizer[k].init(p_dummy)
-                # Add back scan dimension
-                opt_state_shape[k] = jax.tree_util.tree_map(
-                    lambda x: jax.ShapeDtypeStruct((scan_dim,) + x.shape, x.dtype),
-                    single_shape,
-                    is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
-                )
+                opt_state_shape[k] = jax.eval_shape(jax.vmap(optimizer[k].init), p)
             else:
-                # For non-scanned layers, create dummy array
-                p_dummy = jax.tree_util.tree_map(
-                    lambda x: jax.ShapeDtypeStruct(x.shape, x.dtype),
-                    p
-                )
-                opt_state_shape[k] = optimizer[k].init(p_dummy)
+                opt_state_shape[k] = jax.eval_shape(optimizer[k].init, p)
 
         # utility functions for Adam
         def _adam_opt_state_spec_per_leaf(x, spec):
-            if isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState)):
+            raise NotImplementedError
+            # TODO: no use of FrozenDict anymore so this needs to be updated
+            if isinstance(x, FrozenDict):
+                # variables with same structure as params
                 return spec
             else:
+                # other variables such as count
                 return None
 
         def _adam_pspec_fn(spec, shape):
@@ -1177,7 +1153,8 @@ def main():
                 else jax.tree_util.tree_map(
                     partial(_adam_opt_state_spec_per_leaf, spec=spec),
                     shape,
-                    is_leaf=lambda x: isinstance(x, (jax.ShapeDtypeStruct, optax.EmptyState))
+                    # return None spec for empty elements
+                    is_leaf=lambda x: isinstance(x, (FrozenDict, optax.EmptyState)),
                 )
             )
 
@@ -1201,28 +1178,22 @@ def main():
         for k, p in split_scanned_params(trainable_params(logical_params)).items():
             p_spec = split_spec[k]
             if "scanned" in k:
-                # extract 1 layer shape
-                p_shape = jax.tree_util.tree_map(
-                    lambda x: jax.ShapeDtypeStruct(x.shape[1:], x.dtype),
-                    p
-                )
-                p_spec = jax.tree_util.tree_map(
-                    lambda x: PartitionSpec(*x[1:]) if x is not None else None,
-                    p_spec
-                )
+                # extract 1 layer
+                p = jax.eval_shape(lambda x: jax.tree_util.tree_map(lambda y: y[0], x), p)
+                p_spec = jax.tree_util.tree_map(lambda y: PartitionSpec(*y[1:]), p_spec)
             _opt_fn = opt_fn[k] if training_args.optim == "distributed_shampoo" else None
             opt_state_spec[k] = _get_spec(
                 params_spec=p_spec,
                 opt_state_shape=opt_state_shape[k],
                 opt_fn=_opt_fn,
-                params_shape=p_shape if "scanned" in k else p,
+                params_shape=p,
             )
             if "scanned" in k:
                 # add scan dimension
                 opt_state_spec[k] = jax.tree_util.tree_map(
-                    lambda x: PartitionSpec(*scan_spec + x) if x is not None else None,
+                    lambda x: PartitionSpec(*scan_spec + x),
                     opt_state_spec[k],
-                    is_leaf=lambda x: isinstance(x, (PartitionSpec, type(None)))
+                    is_leaf=lambda x: isinstance(x, PartitionSpec),
                 )
 
         return opt_state_spec

@@ -8,6 +8,7 @@ import chex
 import jax
 from jax import vmap
 import jax.numpy as jnp
+from jax.sharding import Mesh, NamedSharding as NS, PartitionSpec as P
 import flax.linen as nn
 from optax import tree_utils as otu
 from optax._src import base, transform
@@ -60,6 +61,8 @@ def scale_by_kron(
     max_merged_dim_size: int = 4096,
     partition_grads_into_blocks: bool = False,
     block_size: int = 128,
+    mesh: Optional[jax.sharding.Mesh] = None,
+    axis_name: str = "data",
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -130,7 +133,7 @@ def scale_by_kron(
         scanned_layers_ = params_struct.flatten_up_to(scanned_layers_)
         scanned_sizes = params_struct.flatten_up_to(scanned_sizes)
         params_without_scan = [
-            first_n_dims(p, int(s)) for p, s in zip(params, scanned_layers_)
+            _first_n_dims(p, int(s)) for p, s in zip(params, scanned_layers_)
         ]
 
         # merge dimensions
@@ -161,13 +164,13 @@ def scale_by_kron(
                 for p_cls, p in zip(partitioners, params_without_scan)
             ]
             # stack same-shaped partitions per layer
-            params_without_scan = [stack_matrices(p) for p in params_without_scan]
+            params_without_scan = [_stack_matrices(p) for p in params_without_scan]
 
         # initialize preconditioners
         Qs = [
             jax.tree.map(
                 lambda t: _init_Q_exprs(
-                    first_n_dims(t, int(partition_grads_into_blocks)),
+                    _first_n_dims(t, int(partition_grads_into_blocks)),
                     preconditioner_init_scale,
                     max_size_triangular,
                     min_ndim_triangular,
@@ -254,9 +257,7 @@ def scale_by_kron(
 
         # normalize grads
         def norm_grads(g):
-            norm = jnp.linalg.norm(g)
-            norm = jnp.where(norm == 0, 1, norm)
-            return g / norm
+            return g / (jnp.linalg.norm(g) + 1e-16)
 
         if normalize_grads:
             updates = jax.tree.map(norm_grads, updates)
@@ -284,7 +285,7 @@ def scale_by_kron(
                 _merge_small_dims(os, max_merged_dim_size) for os in original_shapes
             ]
             momentum_updates = [
-                map_fn(False, 0, int(s), lambda p: jnp.reshape(p, ns), p)
+                _map_fn(False, 0, int(s), lambda p: jnp.reshape(p, ns), p)
                 for s, p, ns in zip(scanned_layers_, momentum_updates, merged_shapes)
             ]
 
@@ -302,7 +303,7 @@ def scale_by_kron(
             ]
             # this becomes list of tuples where each tuple contains layer's partitions
             momentum_updates = [
-                map_fn(False, 0, int(s), p_cls.partition, p)
+                _map_fn(False, 0, int(s), p_cls.partition, p)
                 for s, p, p_cls in zip(scanned_layers_, momentum_updates, partitioners)
             ]
             partitioned_shapes = [
@@ -312,7 +313,7 @@ def scale_by_kron(
             # stack same-shaped partitions per layer, becoming single stacked, double
             # stacked if scanned.
             momentum_updates = [
-                map_fn(False, 0, int(s), stack_matrices, p)
+                _map_fn(False, 0, int(s), _stack_matrices, p)
                 for s, p in zip(scanned_layers_, momentum_updates)
             ]
             revert_indices = [
@@ -329,19 +330,17 @@ def scale_by_kron(
         expressions = [
             tuple(
                 _init_Q_exprs(
-                    first_n_dims(g, nm),
+                    _first_n_dims(g, nm),
                     preconditioner_init_scale,
                     max_size_triangular,
                     min_ndim_triangular,
                     memory_save_mode,
                     precond_dtype,
-                    existing_Q=jax.tree.map(lambda q: first_n_dims(q, nm), Q),
+                    existing_Q=jax.tree.map(lambda q: _first_n_dims(q, nm), Q),
                 )
                 for g, Q in zip(part_gs, part_Qs)
             )
-            for part_gs, part_Qs, nm in zip(
-                momentum_updates, Qs, n_dims_to_map
-            )
+            for part_gs, part_Qs, nm in zip(momentum_updates, Qs, n_dims_to_map)
         ]
 
         # maybe update preconditioner
@@ -349,7 +348,7 @@ def scale_by_kron(
             with jax.default_matmul_precision(precond_update_precision):
                 # create random vectors
                 key, subkey = jax.random.split(key)
-                Vs = tree_random_like(subkey, momentum_updates)
+                Vs = _tree_random_like(subkey, momentum_updates)
 
                 # balance preconditioners about every 100 updates
                 def balance_Qs(Qs_to_bal):
@@ -363,7 +362,7 @@ def scale_by_kron(
 
                     return [
                         tuple(
-                            map_fn(False, 0, nm, _balance_Q, Q) if len(Q) > 1 else Q
+                            _map_fn(False, 0, nm, _balance_Q, Q) if len(Q) > 1 else Q
                             for Q in part_qs
                         )
                         for part_qs, nm in zip(Qs_to_bal, n_dims_to_map)
@@ -372,11 +371,13 @@ def scale_by_kron(
                 key, subkey = jax.random.split(key)
                 do_balances = jax.random.uniform(subkey) <= 0.01
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
+                if mesh is not None:
+                    Qs = _constrain(Qs, mesh, axis_name)
 
                 # form conjB
                 conjBs = [
                     tuple(
-                        map_fn(lax_map, bs, nm, _conjB, Q, g, v)
+                        _map_fn(lax_map, bs, nm, _conjB, Q, g, v)
                         for Q, g, v in zip(part_qs, part_gs, part_vs)
                     )
                     for part_gs, part_qs, part_vs, nm in zip(
@@ -387,7 +388,7 @@ def scale_by_kron(
                 # update Qs
                 new_Qs = [
                     tuple(
-                        map_fn(
+                        _map_fn(
                             lax_map,
                             bs,
                             nm,
@@ -408,6 +409,8 @@ def scale_by_kron(
                         expressions, momentum_updates, Qs, conjBs, n_dims_to_map
                     )
                 ]
+                if mesh is not None:
+                    new_Qs = _constrain(new_Qs, mesh, axis_name)
                 return new_Qs
 
         key, subkey = jax.random.split(key)
@@ -421,14 +424,7 @@ def scale_by_kron(
         with jax.default_matmul_precision(precond_grads_precision):
             precond_gs = [
                 tuple(
-                    map_fn(
-                        lax_map,
-                        bs,
-                        nm,
-                        partial(_precond_grad, exprs=exprs),
-                        Q,
-                        g,
-                    )
+                    _map_fn(lax_map, bs, nm, partial(_precond_grad, exprs=exprs), Q, g)
                     for exprs, Q, g in zip(part_exprs, part_qs, part_gs)
                 )
                 for part_exprs, part_gs, part_qs, nm in zip(
@@ -439,11 +435,11 @@ def scale_by_kron(
         # unpartition grads
         if partition_grads_into_blocks:
             precond_gs = [
-                map_fn(False, 0, int(s), lambda p: unstack_matrices(p, ri), p)
+                _map_fn(False, 0, int(s), lambda p: _unstack_matrices(p, ri), p)
                 for s, p, ri in zip(scanned_layers_, precond_gs, revert_indices)
             ]
             precond_gs = [
-                map_fn(False, 0, int(s), part.merge_partitions, p)
+                _map_fn(False, 0, int(s), part.merge_partitions, p)
                 for s, p, part in zip(scanned_layers_, precond_gs, partitioners)
             ]
         else:
@@ -454,7 +450,7 @@ def scale_by_kron(
         # un-merge dimensions
         if merge_small_dims:
             precond_gs = [
-                map_fn(False, 0, int(s), lambda p: jnp.reshape(p, os), p)
+                _map_fn(False, 0, int(s), lambda p: jnp.reshape(p, os), p)
                 for s, os, p in zip(scanned_layers_, original_shapes, precond_gs)
             ]
 
@@ -501,6 +497,8 @@ def kron(
     max_merged_dim_size: int = 4096,
     partition_grads_into_blocks: bool = False,
     block_size: int = 128,
+    mesh: Optional[jax.sharding.Mesh] = None,
+    axis_name: str = "data",
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -564,6 +562,8 @@ def kron(
             max_merged_dim_size=max_merged_dim_size,
             partition_grads_into_blocks=partition_grads_into_blocks,
             block_size=block_size,
+            mesh=mesh,
+            axis_name=axis_name,
         )
     ]
     if weight_decay > 0.0:
@@ -810,31 +810,52 @@ def _precond_grad(Q, G, exprs):
     return jnp.einsum(exprP, *[q.conj() for q in Q], *Q, G)
 
 
+def _shard_psgd_precond(Q, axis_name):
+    shape = Q.shape
+    sharding = [None for _ in shape]
+    if len(shape) < 2 or shape[-2] != shape[-1]:
+        # probably a diagonal preconditioner
+        return P(*sharding)
+    # Shard if bigger than 0.1 MB
+    if np.prod(shape) * Q.dtype.itemsize >= 0.1 * (2**20):
+        sharding[-2] = axis_name
+    return P(*sharding)
+
+
+def _constrain(Qs, mesh, axis_name):
+    return jax.tree.map(
+        lambda x: jax.lax.with_sharding_constraint(
+            x, NS(mesh, _shard_psgd_precond(x, axis_name))
+        ),
+        Qs,
+    )
+
+
 def _add_tiny(x):
     return x + jnp.finfo(x.dtype).tiny
 
 
-def first_n_dims(x, n):
+def _first_n_dims(x, n):
     if n <= 0:
         return x
     indices = (0,) * n
     return x[indices + (slice(None),) * (x.ndim - n)]
 
 
-def map_fn(lax_map, bs, n_maps, fn, *args):
+def _map_fn(lax_map, bs, n_maps, fn, *args):
     """Maybe map a fn along multiple leading axes."""
     if n_maps <= 0:
         return fn(*args)
 
     if lax_map:
-        mapped_fn = lambda xs: map_fn(lax_map, bs, n_maps - 1, fn, *xs)
+        mapped_fn = lambda xs: _map_fn(lax_map, bs, n_maps - 1, fn, *xs)
         return jax.lax.map(mapped_fn, xs=args, batch_size=bs if bs > 1 else None)
     else:
-        mapped_fn = lambda *xs: map_fn(lax_map, bs, n_maps - 1, fn, *xs)
+        mapped_fn = lambda *xs: _map_fn(lax_map, bs, n_maps - 1, fn, *xs)
         return vmap(mapped_fn)(*args)
 
 
-def tree_random_like(
+def _tree_random_like(
     rng_key: chex.PRNGKey, target_tree: chex.ArrayTree
 ) -> chex.ArrayTree:
     tree_def = jax.tree.structure(target_tree)
@@ -957,12 +978,10 @@ def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
     return unique_sorted_shapes, dict(shape_groups), change_indices, revert_indices
 
 
-def stack_matrices(array_list):
+def _stack_matrices(array_list):
     in_tuple = isinstance(array_list, tuple)
     shapes = [arr.shape for arr in array_list]
-    unique_shapes, shape_groups, change_indices, _ = (
-        _sort_and_group_matrices(shapes)
-    )
+    unique_shapes, shape_groups, change_indices, _ = _sort_and_group_matrices(shapes)
     sorted_arrays = [array_list[i] for i in change_indices]
     stacked_arrays = []
     for shape in unique_shapes:
@@ -974,7 +993,7 @@ def stack_matrices(array_list):
     return stacked_arrays
 
 
-def unstack_matrices(stacked_arrays, revert_indices):
+def _unstack_matrices(stacked_arrays, revert_indices):
     in_tuple = isinstance(stacked_arrays, tuple)
     unstacked = []
     for arr in stacked_arrays:
@@ -995,22 +1014,20 @@ if __name__ == "__main__":
             {
                 "name": "Basic configuration",
                 "params": {"w": jnp.ones((256, 256)), "b": jnp.ones(256)},
-                "config": {
-                    "learning_rate": 0.001,
-                    "b1": 0.9,
-                }
+                "config": {"learning_rate": 0.001, "b1": 0.9},
             },
             {
                 "name": "Weight decay and dtype configuration",
                 "params": {"w": jnp.ones((128, 256)), "b": jnp.ones(128)},
                 "config": {
-                    "learning_rate": lambda n: 0.001 * 0.99**n,  # Test callable learning rate
+                    "learning_rate": lambda n: 0.001
+                    * 0.99**n,  # Test callable learning rate
                     "b1": 0.9,
                     "weight_decay": 0.01,
                     "weight_decay_mask": {"w": True, "b": False},
                     "mu_dtype": jnp.float32,
                     "precond_dtype": jnp.float32,
-                }
+                },
             },
             {
                 "name": "Memory modes and precision configuration",
@@ -1023,7 +1040,7 @@ if __name__ == "__main__":
                     "precond_grads_precision": "float32",
                     "max_size_triangular": 4096,
                     "min_ndim_triangular": 3,
-                }
+                },
             },
             {
                 "name": "Scanned layers with custom update probability",
@@ -1041,7 +1058,7 @@ if __name__ == "__main__":
                     },
                     "lax_map_scanned_layers": True,
                     "lax_map_batch_size": 4,
-                }
+                },
             },
             {
                 "name": "Memory optimization features",
@@ -1056,7 +1073,7 @@ if __name__ == "__main__":
                     "max_merged_dim_size": 2048,
                     "partition_grads_into_blocks": True,
                     "block_size": 64,
-                }
+                },
             },
         ]
 
