@@ -305,9 +305,11 @@ def scale_by_kron(
         # run adam
         mu = otu.tree_update_moment(precond_gs, state["mu"], b1, 1)
         nu = otu.tree_update_moment(precond_gs, state["nu"], 0.99, 2)
-        mu_hat = mu / (1 - b1 ** count_inc)
-        nu_hat = nu / (1 - 0.99 ** count_inc)
-        precond_gs = mu_hat / (jnp.sqrt(nu_hat) + 1e-8)
+        mu_hat = jax.tree.map(lambda x: x / (1 - b1 ** count_inc), mu)
+        nu_hat = jax.tree.map(lambda x: x / (1 - 0.99 ** count_inc), nu)
+        precond_gs = jax.tree.map(
+            lambda x, y: x / (jnp.sqrt(y) + 1e-8), mu_hat, nu_hat
+        )
 
         # box preconditioned grads
         if flax_partitioned:
