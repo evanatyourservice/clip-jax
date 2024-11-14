@@ -299,7 +299,7 @@ def scale_by_kron(
         # )
 
         # unflatten pytrees
-        updates = grads_structure.unflatten(precond_gs)
+        precond_gs = grads_structure.unflatten(precond_gs)
         Qs = grads_structure.unflatten(Qs)
 
         # run adam
@@ -316,6 +316,7 @@ def scale_by_kron(
                 u.replace_boxed(pg) for u, pg in zip(boxed_updates, precond_gs_flat)
             ]
             precond_gs = gs_struct.unflatten(precond_gs)
+
         # dtypes and new state
         Qs = otu.tree_cast(Qs, precond_dtype)
         state = dict(count=count_inc, mu=mu, nu=nu, Qs_preconditioners=Qs)
