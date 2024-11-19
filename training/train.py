@@ -1177,7 +1177,7 @@ def main():
                 partition_grads_into_blocks=True,
                 block_size=256,
                 params_sharding=params_spec,
-                preconditioner_sharding=PartitionSpec(None, None),
+                preconditioner_sharding=PartitionSpec('model', 'data'),
             ),
         ]
         if training_args.weight_decay > 0.0:
