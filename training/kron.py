@@ -554,21 +554,17 @@ def scale_by_kron(
                             _update_precond,
                             exprs=expr_sh,
                             precond_lr=preconditioner_lr,
-                            param_sharding=P(*param_sh[nm:]) if nm > 0 else param_sh,
-                            qs_sharding=[P(*sh[nm:]) if nm > 0 else sh for sh in qs_sh],
                         ),
                         Q,
                         g,
                         conjb,
                     )
-                    for expr_sh, g, Q, conjb, nm, param_sh, qs_sh in zip(
+                    for expr_sh, g, Q, conjb, nm in zip(
                         expressions,
                         momentum_updates,
                         Qs,
                         conjBs,
                         n_dims_to_map,
-                        partitioned_sharding,
-                        Qs_sharding,
                     )
                 ]
                 return new_Qs
@@ -987,7 +983,7 @@ def _conjB(Q, G, V):
     return conjB
 
 
-def _update_precond(Q, G, conjB, exprs, precond_lr, param_sharding, qs_sharding):
+def _update_precond(Q, G, conjB, exprs, precond_lr):
     """Compute A and update Q."""
     exprA, exprGs, _ = exprs
 
