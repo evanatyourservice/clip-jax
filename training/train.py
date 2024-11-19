@@ -1370,10 +1370,11 @@ def main():
         psgd_full_specs = tuple(psgd_full_specs)
         return psgd_full_specs
 
-    if training_args.optim == "kron":
-        opt_state_spec = get_opt_state_spec_psgd()
-    else:
-        opt_state_spec = get_opt_state_spec()
+    with mesh:
+        if training_args.optim == "kron":
+            opt_state_spec = get_opt_state_spec_psgd()
+        else:
+            opt_state_spec = get_opt_state_spec()
 
     # Initialize or restore optimizer state
     logger.info("Initializing optimizer state")
