@@ -1176,8 +1176,8 @@ def main():
                 merge_small_dims=training_args.kron_merge_small_dims,
                 partition_grads_into_blocks=True,
                 block_size=256,
-                # params_sharding=params_spec,
-                # preconditioner_sharding=PartitionSpec(None, None),
+                params_sharding=params_spec,
+                preconditioner_sharding=PartitionSpec(None, "data"),
             ),
         ]
         if training_args.weight_decay > 0.0:
@@ -1298,6 +1298,8 @@ def main():
         temp_params = trainable_params(logical_params, training_args)
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
         params_specs = trainable_params(params_spec, training_args)
+
+        print(jax.tree.map("opt state sharding", lambda x: x.sharding, opt_state_shapes))
 
         # can just explicitly set everything, opt state should be tuple where one
         # entry is scale_by_kron.
