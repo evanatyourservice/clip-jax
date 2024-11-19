@@ -1164,6 +1164,7 @@ def main():
             # optax.clip_by_global_norm(1.0),
             scale_by_kron(
                 b1=training_args.beta1,
+                normalize_grads=True,
                 preconditioner_update_probability=precond_update_prob_schedule(
                     min_prob=1 / training_args.preconditioning_compute_steps
                 ),
@@ -1176,6 +1177,7 @@ def main():
                 partition_grads_into_blocks=True,
                 block_size=128,
                 params_sharding=params_spec,
+                preconditioner_sharding=PartitionSpec(None, None),
             ),
         ]
         if training_args.weight_decay > 0.0:
