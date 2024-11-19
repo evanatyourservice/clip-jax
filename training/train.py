@@ -1319,18 +1319,26 @@ def main():
             opt_state[k] = init_fn(p)
         return opt_state
 
+
+    @partial(jax.jit, in_shardings=(params_spec,))
+    def init_opt_state_psgd(params):
+        return optimizer.init(trainable_params(params, training_args))
+
+
     # Set opt_state
     with mesh:
-        opt_state = init_opt_state(params)
-
         if training_args.optim == "kron":
+            opt_state = init_opt_state_psgd(params)
+
             opt_state_spec = jax.tree.map(
-                lambda x: x.sharding.spec,
+                lambda x: x.sharding,
                 opt_state,
                 is_leaf=lambda x: isinstance(x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)),
             )
             print("opt_state_spec")
             pprint(opt_state_spec, width=120)
+        else:
+            opt_state = init_opt_state(params)
 
     if model_args.restore_state:
         # Restore checkpoint
