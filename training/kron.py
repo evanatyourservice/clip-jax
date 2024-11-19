@@ -331,8 +331,8 @@ def scale_by_kron(
         if have_params_sharding:
             # extend partition specs to all dims
             params_sharding_ = jax.tree.map(
-                lambda p, sh: P(*(sh + (None,) * (len(p.shape) - len(sh)))),
-                params,
+                lambda u, sh: P(*(sh + (None,) * (len(u.shape) - len(sh)))),
+                updates,
                 params_sharding_,
                 is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned)),
             )
