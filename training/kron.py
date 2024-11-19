@@ -131,7 +131,9 @@ def scale_by_kron(
     def init_fn(params):
         params_sharding_ = params_sharding
         if params_sharding is None:
-            params_sharding_ = [None] * len(jax.tree.leaves(params))
+            params_sharding_ = jax.tree.map(
+                lambda _: None, params, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
+            )
         #     # try to grab sharding from params if not provided
         #     params_sharding_ = jax.tree.map(
         #         _try_to_grab_sharding,
@@ -310,7 +312,9 @@ def scale_by_kron(
 
         params_sharding_ = params_sharding
         if params_sharding is None:
-            params_sharding_ = [None] * len(jax.tree.leaves(updates))
+            params_sharding_ = jax.tree.map(
+                lambda _: None, updates, is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned))
+            )
         #     # try to grab sharding from params if not provided
         #     params_sharding_ = jax.tree.map(
         #         _try_to_grab_sharding,
