@@ -1177,7 +1177,7 @@ def main():
                 partition_grads_into_blocks=True,
                 block_size=256,
                 params_sharding=params_spec,
-                preconditioner_sharding=PartitionSpec(None, "data"),
+                preconditioner_sharding=PartitionSpec(None, None),
             ),
         ]
         if training_args.weight_decay > 0.0:
@@ -1294,83 +1294,18 @@ def main():
         return opt_state_spec
 
     def get_opt_state_spec_psgd():
-        # a little different from above because psgd scans layers internally
         temp_params = trainable_params(logical_params, training_args)
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
-        params_specs = trainable_params(params_spec, training_args)
 
-        print("opt state sharding", jax.tree.map(lambda x: x.sharding.spec, opt_state_shapes, is_leaf=lambda x: isinstance(x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct))))
+        psgd_sharding = jax.tree.map(
+            lambda x: PartitionSpec() if x.sharding is None else PartitionSpec(*x.sharding),
+            opt_state_shapes,
+            is_leaf=lambda x: isinstance(x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)),
+        )
+        print("opt state sharding", psgd_sharding)
 
-        # can just explicitly set everything, opt state should be tuple where one
-        # entry is scale_by_kron.
-        psgd_idx = 0
-        for part in opt_state_shapes:
-            if isinstance(part, dict):  # kron state is a dictionary
-                if "Qs_preconditioners" in part:
-                    break
-            psgd_idx += 1
+        return psgd_sharding
 
-        data_size = mesh.shape["data"]
-        model_size = mesh.shape["model"]
-
-        def shard_psgd_precond(Qs: list):
-            if training_args.shard_shampoo_across == "2d":
-                first_dim = "model" if training_args.mp_devices > training_args.dp_devices else "data"
-                last_dim = "data" if training_args.mp_devices > training_args.dp_devices else "model"
-            elif training_args.shard_shampoo_across == "model":
-                first_dim = "model"
-                last_dim = None
-            elif training_args.shard_shampoo_across == "data":
-                first_dim = "data"
-                last_dim = None
-            else:
-                raise ValueError(f"Invalid shard_shampoo_across: {training_args.shard_shampoo_across}")
-            precond_specs = []
-            for precond in Qs:
-                shape = precond.shape
-                new_sharding = [None for _ in shape]
-                if (
-                    len(shape) < 2
-                    or (len(shape) == 2 and shape[-2] != shape[-1])
-                ):
-                    # definitely a diagonal preconditioner, replicate
-                    precond_specs.append(PartitionSpec(*new_sharding))
-                    continue
-                # shard if bigger than 0.1 MB and divisible by sharding axis
-                if np.prod(shape) * precond.dtype.itemsize >= 0.1 * (2**20):
-                    if first_dim == "data" and shape[-2] % data_size == 0:
-                        new_sharding[-2] = first_dim
-                    elif first_dim == "model" and shape[-2] % model_size == 0:
-                        new_sharding[-2] = first_dim
-                    if last_dim == "data" and shape[-1] % data_size == 0:
-                        new_sharding[-1] = last_dim
-                    elif last_dim == "model" and shape[-1] % model_size == 0:
-                        new_sharding[-1] = last_dim
-                precond_specs.append(PartitionSpec(*new_sharding))
-            return precond_specs
-
-        psgd_specs = {}
-        for k, v in opt_state_shapes[psgd_idx].items():
-            if k == "count":
-                # count is not sharded
-                psgd_specs[k] = PartitionSpec()
-            elif k == "mu":
-                # momentum matches params
-                psgd_specs[k] = params_specs
-            elif k == "nu":
-                # second moment matches params
-                psgd_specs[k] = params_specs
-            elif k == "Qs_preconditioners":
-                # preconditioners (kept in lists)
-                precond_specs = jax.tree.map(
-                    shard_psgd_precond, v, is_leaf=lambda x: isinstance(x, list)
-                )
-                psgd_specs[k] = precond_specs
-
-        psgd_full_specs = [PartitionSpec()] * len(opt_state_shapes)
-        psgd_full_specs[psgd_idx] = psgd_specs
-        psgd_full_specs = tuple(psgd_full_specs)
-        return psgd_full_specs
 
     with mesh:
         if training_args.optim == "kron":
