@@ -1320,7 +1320,7 @@ def main():
         return opt_state
 
 
-    @partial(jax.jit, in_shardings=(params_spec,))
+    @partial(pjit, in_shardings=(params_spec,))
     def init_opt_state_psgd(params):
         return optimizer.init(trainable_params(params, training_args))
 
