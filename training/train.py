@@ -1299,7 +1299,7 @@ def main():
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
         params_specs = trainable_params(params_spec, training_args)
 
-        print(jax.tree.map("opt state sharding", lambda x: x.sharding, opt_state_shapes))
+        print("opt state sharding", jax.tree.map(lambda x: x.sharding, opt_state_shapes))
 
         # can just explicitly set everything, opt state should be tuple where one
         # entry is scale_by_kron.
