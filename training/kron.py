@@ -22,9 +22,14 @@ from optax._src.combine import chain
 
 # spoof multiple jax devices
 os.environ["XLA_FLAGS"] = (
-    "--xla_force_host_platform_device_count=64 "
+    # "--xla_force_host_platform_device_count=64 "
     # "--xla_dump_to=/Users/evanwalters/xla_logs"
 )
+
+# TODO check for P() edge case
+# TODO check for None consistency
+# TODO check all arg combinations
+# TODO check for memory usage
 
 
 def precond_update_prob_schedule(

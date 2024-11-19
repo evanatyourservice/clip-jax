@@ -1175,9 +1175,9 @@ def main():
                 ),
                 merge_small_dims=training_args.kron_merge_small_dims,
                 partition_grads_into_blocks=True,
-                block_size=128,
-                params_sharding=params_spec,
-                preconditioner_sharding=PartitionSpec(None, None),
+                block_size=256,
+                # params_sharding=params_spec,
+                # preconditioner_sharding=PartitionSpec(None, None),
             ),
         ]
         if training_args.weight_decay > 0.0:
