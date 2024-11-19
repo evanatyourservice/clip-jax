@@ -1303,7 +1303,8 @@ def main():
             is_leaf=lambda x: isinstance(x, (jax.Array, jax.ShapeDtypeStruct)),
         )
 
-        pprint("opt state sharding", psgd_sharding, width=120)
+        print("opt state sharding")
+        pprint(psgd_sharding, width=120)
         return psgd_sharding
 
     with mesh:
