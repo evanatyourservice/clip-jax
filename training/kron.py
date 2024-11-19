@@ -130,13 +130,13 @@ def scale_by_kron(
 
     def init_fn(params):
         params_sharding_ = params_sharding
-        if params_sharding is None:
-            # try to grab sharding from params if not provided
-            params_sharding_ = jax.tree.map(
-                _try_to_grab_sharding,
-                params,
-                is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned)),
-            )
+        # if params_sharding is None:
+        #     # try to grab sharding from params if not provided
+        #     params_sharding_ = jax.tree.map(
+        #         _try_to_grab_sharding,
+        #         params,
+        #         is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned)),
+        #     )
         # can be used for grads-shaped constraints
         have_params_sharding = any(
             sh is not None for sh in jax.tree.leaves(params_sharding_)
@@ -308,13 +308,13 @@ def scale_by_kron(
         key = jax.random.fold_in(jax.random.PRNGKey(42), state["count"])
 
         params_sharding_ = params_sharding
-        if params_sharding is None:
-            # try to grab sharding from params if not provided
-            params_sharding_ = jax.tree.map(
-                _try_to_grab_sharding,
-                params,
-                is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned)),
-            )
+        # if params_sharding is None:
+        #     # try to grab sharding from params if not provided
+        #     params_sharding_ = jax.tree.map(
+        #         _try_to_grab_sharding,
+        #         params,
+        #         is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned)),
+        #     )
         # can be used for grads-shaped constraints
         have_params_sharding = any(
             sh is not None for sh in jax.tree.leaves(params_sharding_)
