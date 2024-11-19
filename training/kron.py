@@ -456,6 +456,7 @@ def scale_by_kron(
                 # add dim to sharding for new stacked dim
                 partitioned_sharding = [
                     P(*(mps[:1] + (None,) + mps[1:] if s else (None,) + mps))
+                    if mps else P()
                     for s, mps in zip(scanned_layers_, merged_params_sharding)
                 ]
                 # constrain sharding
