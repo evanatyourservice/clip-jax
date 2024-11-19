@@ -230,19 +230,26 @@ def scale_by_kron(
             ]
 
         # initialize preconditioners
-        Qs = [
-            jax.tree.map(
-                lambda t: _init_Q_exprs(
-                    _first_n_dims(t, int(partition_grads_into_blocks)),
-                    preconditioner_init_scale,
-                    dd,
-                    precond_dtype,
-                    precond_sharding=preconditioner_sharding,
-                    param_sharding=sh,
-                )[0],
-                p,
+        output = [
+            _init_Q_exprs(
+                _first_n_dims(p, int(partition_grads_into_blocks)),
+                preconditioner_init_scale,
+                dd,
+                precond_dtype,
+                precond_sharding=preconditioner_sharding,
+                param_sharding=sh,
             )
             for p, dd, sh in zip(params_without_scan, dim_diag, sharding_without_scan)
+        ]
+        Qs = [x[0] for x in output]
+        Qs_sharding = [x[2] for x in output]
+        # add scan and stack dims to sharding
+        Qs_sharding = [
+            [
+                P(*(sds + (None,) + qs if sds is not None else (None,) + qs))
+                for qs in qss
+            ]
+            for sds, qss in zip(scanned_dim_sharding, Qs_sharding)
         ]
         # broadcast for stacks and scans
         all_Qs = []
@@ -261,24 +268,11 @@ def scale_by_kron(
                 new_q = jax.tree.map(
                     lambda d: jnp.repeat(jnp.expand_dims(d, 0), s, axis=0), new_q
                 )
-                # constrain to pipeline sharding
-                if have_params_sharding:
-                    new_q = jax.tree.map(
-                        lambda x: with_sharding_constraint(
-                            x,
-                            P(
-                                *(
-                                    pipe + x.sharding.spec[1:]
-                                    if pipe is not None
-                                    else x.sharding.spec
-                                )
-                            ),
-                        ),
-                        new_q,
-                    )
             all_Qs.append(new_q)
         # for a stacked and scanned layer, it now has two leading dims to be vmapped
         Qs = all_Qs
+        if have_qs_sharding:
+            Qs = with_sharding_constraint(Qs, Qs_sharding)
         Qs = params_struct.unflatten(Qs)
 
         # Calculate sizes for nu (preconditioner) and mu (momentum)
