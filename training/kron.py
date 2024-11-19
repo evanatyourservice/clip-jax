@@ -317,14 +317,6 @@ def scale_by_kron(
         # can be used for preconditioner-shaped constraints and can be explicitly
         # set by user or inferred from params sharding
         have_qs_sharding = have_params_sharding or preconditioner_sharding is not None
-        if have_params_sharding:
-            # extend partition specs to all dims
-            params_sharding_ = jax.tree.map(
-                lambda p, sh: P(*(sh + (None,) * (len(p.shape) - len(sh)))),
-                params,
-                params_sharding_,
-                is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned)),
-            )
 
         # unbox if flax style partitioned
         boxed_updates, grads_structure = jax.tree.flatten(
@@ -335,6 +327,15 @@ def scale_by_kron(
             flax_partitioned = True
             updates = [u.unbox() for u in boxed_updates]
             updates = grads_structure.unflatten(updates)
+
+        if have_params_sharding:
+            # extend partition specs to all dims
+            params_sharding_ = jax.tree.map(
+                lambda p, sh: P(*(sh + (None,) * (len(p.shape) - len(sh)))),
+                params,
+                params_sharding_,
+                is_leaf=lambda v: isinstance(v, (chex.Array, nn.Partitioned)),
+            )
 
         # scanned layers
         scanned_layers_ = scanned_layers
