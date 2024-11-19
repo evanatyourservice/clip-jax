@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from functools import partial
 from platform import python_version
-from pprint import pformat
+from pprint import pformat, pprint
 from typing import Any, Callable, Dict, List, NamedTuple, Optional
 
 import flax
@@ -1298,14 +1298,14 @@ def main():
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
 
         psgd_sharding = jax.tree.map(
-            lambda x: PartitionSpec() if x.sharding is None else PartitionSpec(*x.sharding),
+            lambda _, x: PartitionSpec() if x.sharding is None else PartitionSpec(*x.sharding),
+            temp_params,
             opt_state_shapes,
-            is_leaf=lambda x: isinstance(x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)),
+            is_leaf=lambda x: isinstance(x, (jax.Array, jax.ShapeDtypeStruct)),
         )
-        print("opt state sharding", psgd_sharding)
 
+        pprint("opt state sharding", psgd_sharding, width=120)
         return psgd_sharding
-
 
     with mesh:
         if training_args.optim == "kron":
