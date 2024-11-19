@@ -21,10 +21,10 @@ from optax._src.combine import chain
 
 
 # spoof multiple jax devices
-# os.environ["XLA_FLAGS"] = (
-#     "--xla_force_host_platform_device_count=64 "
-#     # "--xla_dump_to=/Users/evanwalters/xla_logs"
-# )
+os.environ["XLA_FLAGS"] = (
+    "--xla_force_host_platform_device_count=4 "
+    # "--xla_dump_to=/Users/evanwalters/xla_logs"
+)
 
 # TODO check for P() edge case
 # TODO check for None consistency
@@ -1272,8 +1272,8 @@ def _unstack_and_unpad_matrices(stacked_array, original_shapes):
 if __name__ == "__main__":
     from jax.sharding import Mesh
 
-    devices = np.array(jax.devices()).reshape(4, 4, 4)
-    mesh = Mesh(devices, ("pipe", "fsdp", "model"))
+    devices = np.array(jax.devices()).reshape(4, 1)
+    mesh = Mesh(devices, ("fsdp", "model"))
 
     with mesh:
         fake_params = {
@@ -1298,13 +1298,13 @@ if __name__ == "__main__":
             "w4": True,
         }
         sharding = {
-            "w1": P("pipe", "fsdp"),
+            "w1": P(None, "fsdp"),
             "b1": P(None),
-            "w2": P("pipe", "fsdp", "model"),
+            "w2": P(None, "fsdp", "model"),
             "b2": P(None),
             "w3": P(None, "fsdp", None, "model"),
             "b3": P(None),
-            "w4": P("pipe", "fsdp", "model"),
+            "w4": P(None, "fsdp", "model"),
         }
         fake_params = with_sharding_constraint(fake_params, sharding)
         fake_grads = with_sharding_constraint(fake_grads, sharding)
@@ -1328,6 +1328,11 @@ if __name__ == "__main__":
             params_sharding=sharding,
             preconditioner_sharding=P("fsdp", "model"),
         )
+
+        opt_state_shapes = jax.eval_shape(optimizer.init, fake_params)
+        print("opt_state_shapes")
+        pprint(jax.tree.map(lambda x: x.shape, opt_state_shapes, is_leaf=lambda x: isinstance(x, jax.ShapeDtypeStruct)), width=120)
+        pprint(jax.tree.map(lambda x: x.sharding, opt_state_shapes, is_leaf=lambda x: isinstance(x, jax.ShapeDtypeStruct)), width=120)
 
         opt_state = optimizer.init(fake_params)
         print("opt_state")
