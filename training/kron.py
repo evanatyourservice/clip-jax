@@ -251,14 +251,15 @@ def scale_by_kron(
         ]
         Qs = [x[0] for x in output]
         Qs_sharding = [x[2] for x in output]
-        # add scan and stack dims to sharding
-        Qs_sharding = [
-            [
-                P(*(sds + (None,) + qs if sds is not None else (None,) + qs))
-                for qs in qss
+        if have_qs_sharding:
+            # add scan and stack dims to sharding
+            Qs_sharding = [
+                [
+                    P(*(sds + (None,) + qs if sds is not None else (None,) + qs))
+                    for qs in qss
+                ]
+                for sds, qss in zip(scanned_dim_sharding, Qs_sharding)
             ]
-            for sds, qss in zip(scanned_dim_sharding, Qs_sharding)
-        ]
         # broadcast for stacks and scans
         all_Qs = []
         for q, p, s, pipe in zip(
