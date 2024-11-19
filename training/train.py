@@ -1297,7 +1297,7 @@ def main():
         temp_params = trainable_params(logical_params, training_args)
         opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
         print("opt state shapes")
-        pprint(opt_state_shapes, width=120)
+        pprint(jax.tree.map(lambda x: x.sharding, opt_state_shapes, is_leaf=lambda x: isinstance(x, jax.ShapeDtypeStruct)), width=120)
 
         psgd_sharding = jax.tree.map(
             lambda x: PartitionSpec() if x.sharding is None else PartitionSpec(*x.sharding),
