@@ -1293,25 +1293,9 @@ def main():
                 )
         return opt_state_spec
 
-    def get_opt_state_spec_psgd():
-        temp_params = trainable_params(logical_params, training_args)
-        opt_state_shapes = jax.eval_shape(optimizer.init, temp_params)
-        print("opt state shapes")
-        pprint(jax.tree.map(lambda x: x.sharding, opt_state_shapes, is_leaf=lambda x: isinstance(x, jax.ShapeDtypeStruct)), width=120)
-
-        psgd_sharding = jax.tree.map(
-            lambda x: PartitionSpec() if x.sharding is None else PartitionSpec(*x.sharding),
-            opt_state_shapes,
-            is_leaf=lambda x: isinstance(x, (jax.Array, jax.ShapeDtypeStruct)),
-        )
-
-        print("opt state sharding")
-        pprint(psgd_sharding, width=120)
-        return psgd_sharding
-
     with mesh:
         if training_args.optim == "kron":
-            opt_state_spec = get_opt_state_spec_psgd()
+            opt_state_spec = None
         else:
             opt_state_spec = get_opt_state_spec()
 
@@ -1338,6 +1322,15 @@ def main():
     # Set opt_state
     with mesh:
         opt_state = init_opt_state(params)
+
+        if training_args.optim == "kron":
+            opt_state_spec = jax.tree.map(
+                lambda x: x.sharding.spec,
+                opt_state,
+                is_leaf=lambda x: isinstance(x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)),
+            )
+            print("opt_state_spec")
+            pprint(opt_state_spec, width=120)
 
     if model_args.restore_state:
         # Restore checkpoint
