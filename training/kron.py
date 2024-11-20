@@ -1291,7 +1291,7 @@ def profile_kron():
 
     rng = jax.random.PRNGKey(0)
     hidden_dim = 2000
-    num_layers = 8
+    num_layers = 4
     block_size = 512
     do_profiling = True
 
@@ -1304,8 +1304,8 @@ def profile_kron():
                     "output": jax.random.normal(rng, (2, 3 * hidden_dim, hidden_dim)),
                 },
                 "mlp": {
-                    "fc1": jax.random.normal(rng, (2, hidden_dim, 4 * hidden_dim)),
-                    "fc2": jax.random.normal(rng, (2, 4 * hidden_dim, hidden_dim)),
+                    "fc1": jax.random.normal(rng, (2, hidden_dim, 3 * hidden_dim)),
+                    "fc2": jax.random.normal(rng, (2, 3 * hidden_dim, hidden_dim)),
                 },
             }
             params.append(layer_params)
