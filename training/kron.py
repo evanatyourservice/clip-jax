@@ -3,7 +3,6 @@ from typing import Any, List, Optional, Union, Callable, Tuple
 from functools import partial
 import string
 from collections import defaultdict
-from pprint import pprint
 import numpy as np
 
 import chex
@@ -21,7 +20,7 @@ from optax._src.combine import chain
 
 
 def precond_update_prob_schedule(
-    max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=250
+    max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500
 ):
     """Anneal preconditioner update probability during beginning of training.
 
@@ -29,7 +28,7 @@ def precond_update_prob_schedule(
     but once the preconditioner is learned the update probability can drop low.
 
     This schedule is an exponential anneal with a flat start. Default settings keep
-    update probability at 1.0 for 250 steps then exponentially anneal down to
+    update probability at 1.0 for 500 steps then exponentially anneal down to
     `min_prob` by 4000 steps. Default settings work well for most models and
     training regimes.
     """
@@ -546,8 +545,8 @@ def scale_by_kron(
                     _map_fn(lax_map, bs, nm, _conjB, Q, g, v)
                     for g, Q, v, nm in zip(momentum_updates, Qs, Vs, n_dims_to_map)
                 ]
-                if have_params_sharding:
-                    conjBs = safe_sharding_constraint(conjBs, partitioned_sharding)
+                # if have_params_sharding:
+                #     conjBs = safe_sharding_constraint(conjBs, partitioned_sharding)
 
                 # update Qs and constrain sharding
                 new_Qs = [
@@ -569,11 +568,9 @@ def scale_by_kron(
                 return new_Qs
 
         # update preconditioner deterministically
-        do_update = state["update_counter"] >= jnp.round(1 / update_prob_in).astype(
-            jnp.int32
-        )
-        update_counter_inc = jnp.where(do_update, 0, state["update_counter"])
-        update_counter_inc = safe_int32_increment(update_counter_inc)
+        update_counter_inc = safe_int32_increment(state["update_counter"])
+        do_update = update_counter_inc >= 1 / update_prob_in
+        update_counter_inc = jnp.where(do_update, 0, update_counter_inc)
         key, subkey = jax.random.split(key)
         new_Qs = jax.lax.cond(
             do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
@@ -1276,144 +1273,3 @@ def _unstack_and_unpad_matrices(stacked_array, original_shapes):
         slices = tuple(slice(0, dim) for dim in orig_shape)
         unpadded.append(jnp.squeeze(arr, axis=0)[slices])
     return tuple(unpadded)
-
-
-if __name__ == "__main__":
-    from jax.sharding import Mesh
-
-    devices = np.array(jax.devices()).reshape(4, 1)
-    mesh = Mesh(devices, ("fsdp", "model"))
-
-    with mesh:
-        fake_params = {
-            "w1": jnp.ones((4, 32, 3, 3)),
-            "b1": jnp.ones((32,)),
-            "w2": jnp.ones((4, 1024, 4, 4)),
-            "b2": jnp.ones((1024,)),
-            "w3": jnp.ones((4, 1024, 8, 40)),
-            "b3": jnp.ones((64,)),
-            "w4": jnp.ones((4, 128, 128)),
-        }
-        fake_grads = jax.tree.map(
-            lambda x: jax.random.normal(jax.random.PRNGKey(0), x.shape), fake_params
-        )
-        scanning = {
-            "w1": False,
-            "b1": False,
-            "w2": True,
-            "b2": False,
-            "w3": True,
-            "b3": False,
-            "w4": True,
-        }
-        sharding = {
-            "w1": PartitionSpec(None, "fsdp"),
-            "b1": PartitionSpec(),
-            "w2": PartitionSpec(None, "fsdp", "model"),
-            "b2": None,
-            "w3": PartitionSpec(None, "fsdp", None, "model"),
-            "b3": PartitionSpec(None),
-            "w4": PartitionSpec(None, "fsdp", "model"),
-        }
-        fake_params = with_sharding_constraint(fake_params, sharding)
-        fake_grads = with_sharding_constraint(fake_grads, sharding)
-
-        print("fake_params")
-        pprint(jax.tree.map(lambda x: x.shape, fake_params), width=120)
-        pprint(jax.tree.map(lambda x: x.sharding, fake_params), width=120)
-
-        print("fake_grads")
-        pprint(jax.tree.map(lambda x: x.shape, fake_grads), width=120)
-        pprint(jax.tree.map(lambda x: x.sharding, fake_grads), width=120)
-
-        optimizer = kron(
-            learning_rate=0.0003,
-            normalize_grads=True,
-            scanned_layers=scanning,
-            merge_small_dims=True,
-            target_merged_dim_size=1024,
-            partition_grads_into_blocks=True,
-            block_size=128,
-            params_sharding=sharding,
-            preconditioner_sharding=PartitionSpec(),
-        )
-
-        opt_state_shapes = jax.eval_shape(optimizer.init, fake_params)
-        print("opt_state_shapes")
-        pprint(
-            jax.tree.map(
-                lambda x: x.shape,
-                opt_state_shapes,
-                is_leaf=lambda x: isinstance(x, jax.ShapeDtypeStruct),
-            ),
-            width=120,
-        )
-        pprint(
-            jax.tree.map(
-                lambda x: x.sharding,
-                opt_state_shapes,
-                is_leaf=lambda x: isinstance(x, jax.ShapeDtypeStruct),
-            ),
-            width=120,
-        )
-
-        opt_state = optimizer.init(fake_params)
-        print("opt_state")
-        pprint(jax.tree.map(lambda x: x.shape, opt_state), width=120)
-        pprint(jax.tree.map(lambda x: x.sharding, opt_state), width=120)
-
-        updates, new_state = optimizer.update(fake_grads, opt_state, fake_params)
-        print("updates")
-        pprint(jax.tree.map(lambda x: x.shape, updates), width=120)
-        pprint(jax.tree.map(lambda x: x.sharding, updates), width=120)
-        print("new_state")
-        pprint(jax.tree.map(lambda x: x.shape, new_state), width=120)
-        pprint(jax.tree.map(lambda x: x.sharding, new_state), width=120)
-
-        # After the update
-        print("\nRunning consistency checks...")
-
-        # Check input consistency
-        assert jax.tree.map(
-            lambda x, y: x.shape == y.shape, fake_grads, fake_params
-        ), "Input gradients don't match parameter shapes"
-        assert jax.tree.map(
-            lambda x, y: x.sharding == y.sharding, fake_grads, fake_params
-        ), "Input gradients don't match parameter shardings"
-        assert jax.tree.map(
-            lambda x, y: x.shape == y.shape, opt_state[0]["mu"], fake_params
-        ), "Initial momentum doesn't match parameter shapes"
-        assert jax.tree.map(
-            lambda x, y: x.sharding == y.sharding, opt_state[0]["mu"], fake_params
-        ), "Initial momentum doesn't match parameter shardings"
-        print("✓ Input states maintain consistent structure")
-
-        # Check update consistency
-        assert jax.tree.map(
-            lambda x, y: x.shape == y.shape, updates, fake_grads
-        ), "Update shapes don't match input gradients"
-        assert jax.tree.map(
-            lambda x, y: x.sharding == y.sharding, updates, fake_grads
-        ), "Update shardings don't match input gradients"
-        assert jax.tree.map(
-            lambda x, y: x.shape == y.shape, new_state[0]["mu"], fake_grads
-        ), "Output momentum doesn't match input gradient shapes"
-        assert jax.tree.map(
-            lambda x, y: x.sharding == y.sharding, new_state[0]["mu"], fake_grads
-        ), "Output momentum doesn't match input gradient shardings"
-        print("✓ Updates maintain input gradient structure")
-
-        # Check preconditioner consistency
-        assert jax.tree.map(
-            lambda x, y: x.shape == y.shape,
-            opt_state[0]["Qs_preconditioners"],
-            new_state[0]["Qs_preconditioners"],
-        ), "Preconditioner shapes changed during update"
-        assert jax.tree.map(
-            lambda x, y: x.sharding == y.sharding,
-            opt_state[0]["Qs_preconditioners"],
-            new_state[0]["Qs_preconditioners"],
-        ), "Preconditioner shardings changed during update"
-        print("✓ Preconditioners maintain consistency")
-
-        print("\nAll consistency checks passed!")
