@@ -1291,7 +1291,7 @@ def profile_kron():
 
     rng = jax.random.PRNGKey(0)
     hidden_dim = 2000
-    num_layers = 4
+    num_layers = 3
     block_size = 512
     do_profiling = True
 
