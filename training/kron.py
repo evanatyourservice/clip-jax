@@ -1283,20 +1283,20 @@ def profile_kron():
     mesh = jax.sharding.Mesh(device_mesh, ("data", "model"))
 
     rng = jax.random.PRNGKey(0)
-    hidden_dim = 4096
-    num_layers = 24
+    hidden_dim = 2048
+    num_layers = 4
 
     def create_fake_params():
         params = []
         for _ in range(num_layers):
             layer_params = {
                 "attention": {
-                    "qkv": jax.random.normal(rng, (hidden_dim, 3 * hidden_dim)),
-                    "output": jax.random.normal(rng, (hidden_dim, hidden_dim)),
+                    "qkv": jax.random.normal(rng, (2, hidden_dim, 3 * hidden_dim)),
+                    "output": jax.random.normal(rng, (2, hidden_dim, hidden_dim)),
                 },
                 "mlp": {
-                    "fc1": jax.random.normal(rng, (hidden_dim, 4 * hidden_dim)),
-                    "fc2": jax.random.normal(rng, (4 * hidden_dim, hidden_dim)),
+                    "fc1": jax.random.normal(rng, (2, hidden_dim, 4 * hidden_dim)),
+                    "fc2": jax.random.normal(rng, (2, 4 * hidden_dim, hidden_dim)),
                 },
             }
             params.append(layer_params)
@@ -1329,9 +1329,9 @@ def profile_kron():
     optimizer = kron(
         learning_rate=0.001,
         b1=0.9,
-        normalize_grads=True,
+        normalize_grads=False,
         preconditioner_update_probability=1.0,
-        memory_save_mode="one_diag",
+        memory_save_mode=None,
         merge_small_dims=True,
         target_merged_dim_size=2048,
         partition_grads_into_blocks=True,
@@ -1361,11 +1361,14 @@ def profile_kron():
             jax.profiler.start_trace("gs://optimizertesting/kron_profile")
 
         with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
+            print(f"step {step}")
             with mesh:
                 state = opt_step(state, grads)
 
         if step == 10:
             jax.profiler.stop_trace()
+
+    print("Profiling completed. Data saved to gs://optimizertesting/kron_profile")
 
 
 if __name__ == "__main__":
