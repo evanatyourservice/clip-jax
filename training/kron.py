@@ -1213,6 +1213,28 @@ def _merge_small_dims(
     )
 
 
+def _pad_and_stack_matrices(array_list, block_size):
+    shapes = [arr.shape for arr in array_list]
+    max_dims = [max(shape[i] for shape in shapes) for i in range(len(shapes[0]))]
+    padded_shape = [-(-dim // block_size) * block_size for dim in max_dims]
+    padded_arrays = []
+    for arr in array_list:
+        pad_width = [(0, padded_shape[i] - arr.shape[i]) for i in range(arr.ndim)]
+        padded = jnp.pad(arr, pad_width, mode="constant", constant_values=0)
+        padded_arrays.append(padded)
+    return jnp.stack(padded_arrays)
+
+
+def _unstack_and_unpad_matrices(stacked_array, original_shapes):
+    unstacked = jnp.split(stacked_array, stacked_array.shape[0], axis=0)
+    unpadded = []
+    for arr, orig_shape in zip(unstacked, original_shapes):
+        slices = tuple(slice(0, dim) for dim in orig_shape)
+        unpadded.append(jnp.squeeze(arr, axis=0)[slices])
+    return tuple(unpadded)
+
+
+# unused fns:
 def _sort_and_group_matrices(matrix_shapes: List[Tuple[int, ...]]):
     indexed_list = list(enumerate(matrix_shapes))
     sorted_indexed = sorted(indexed_list, key=lambda x: x[1])
@@ -1252,24 +1274,3 @@ def _unstack_matrices(stacked_arrays, revert_indices):
     if in_tuple:
         return tuple(array_list)
     return array_list
-
-
-def _pad_and_stack_matrices(array_list, block_size):
-    shapes = [arr.shape for arr in array_list]
-    max_dims = [max(shape[i] for shape in shapes) for i in range(len(shapes[0]))]
-    padded_shape = [-(-dim // block_size) * block_size for dim in max_dims]
-    padded_arrays = []
-    for arr in array_list:
-        pad_width = [(0, padded_shape[i] - arr.shape[i]) for i in range(arr.ndim)]
-        padded = jnp.pad(arr, pad_width, mode="constant", constant_values=0)
-        padded_arrays.append(padded)
-    return jnp.stack(padded_arrays)
-
-
-def _unstack_and_unpad_matrices(stacked_array, original_shapes):
-    unstacked = jnp.split(stacked_array, stacked_array.shape[0], axis=0)
-    unpadded = []
-    for arr, orig_shape in zip(unstacked, original_shapes):
-        slices = tuple(slice(0, dim) for dim in orig_shape)
-        unpadded.append(jnp.squeeze(arr, axis=0)[slices])
-    return tuple(unpadded)
