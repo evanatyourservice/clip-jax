@@ -1281,11 +1281,11 @@ def profile_kron():
     mesh_shape = (len(devices) // 2, 2)
     device_mesh = np.array(devices).reshape(mesh_shape)
     mesh = jax.sharding.Mesh(device_mesh, ('data', 'model'))
-    
+
     rng = jax.random.PRNGKey(0)
     hidden_dim = 4096
     num_layers = 24
-    
+
     def create_fake_params():
         params = []
         for _ in range(num_layers):
@@ -1301,7 +1301,7 @@ def profile_kron():
             }
             params.append(layer_params)
         return params
-    
+
     def create_sharding_specs():
         layer_spec = {
             'attention': {
@@ -1314,7 +1314,7 @@ def profile_kron():
             }
         }
         return [layer_spec for _ in range(num_layers)]
-    
+
     def create_scan_specs():
         layer_spec = {
             'attention': {
@@ -1327,11 +1327,11 @@ def profile_kron():
             }
         }
         return [layer_spec for _ in range(num_layers)]
-    
+
     params = create_fake_params()
     params_sharding = create_sharding_specs()
     scanned_layers = create_scan_specs()
-    
+
     optimizer = kron(
         learning_rate=0.001,
         b1=0.9,
@@ -1348,32 +1348,30 @@ def profile_kron():
         lax_map_scanned_layers=True,
         lax_map_batch_size=8,
     )
-    
+
     with mesh:
         opt_state = optimizer.init(params)
-    
+
     grads = jax.tree.map(lambda x: jax.random.normal(rng, x.shape, x.dtype), params)
-    
+
     @jax.jit
     def opt_step(opt_state, grads):
         updates, new_state = optimizer.update(grads, opt_state, params)
         return new_state
-    
+
     with mesh:
         state = opt_step(opt_state, grads)
-    
+
     for step in range(20):
         if step == 5:
-            if jax.process_index() == 0:
-                jax.profiler.start_trace("/tmp/kron_profile")
-        
+            jax.profiler.start_trace("gs://optimizertesting/kron_profile")
+
         with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
             with mesh:
                 state = opt_step(state, grads)
-                
+
         if step == 10:
-            if jax.process_index() == 0:
-                jax.profiler.stop_trace()
+            jax.profiler.stop_trace()
 
 if __name__ == "__main__":
     profile_kron()
