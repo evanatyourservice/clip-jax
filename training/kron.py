@@ -1290,9 +1290,9 @@ def profile_kron():
     print(f"mesh: {mesh}")
 
     rng = jax.random.PRNGKey(0)
-    hidden_dim = 16
-    num_layers = 2
-    block_size = 32
+    hidden_dim = 2000
+    num_layers = 8
+    block_size = 512
     do_profiling = False
 
     def create_fake_params():
