@@ -1277,10 +1277,14 @@ def _unstack_matrices(stacked_arrays, revert_indices):
 
 
 def profile_kron():
+    from pprint import pprint
+
     devices = jax.devices()
+    print(f"devices: {devices}")
     mesh_shape = (len(devices) // 2, 2)
     device_mesh = np.array(devices).reshape(mesh_shape)
     mesh = jax.sharding.Mesh(device_mesh, ("data", "model"))
+    print(f"mesh: {mesh}")
 
     rng = jax.random.PRNGKey(0)
     hidden_dim = 2048
@@ -1323,8 +1327,14 @@ def profile_kron():
         return [layer_spec for _ in range(num_layers)]
 
     params = create_fake_params()
+    print(f"params:")
+    pprint(params, width=120)
     params_sharding = create_sharding_specs()
+    print(f"params_sharding:")
+    pprint(params_sharding, width=120)
     scanned_layers = create_scan_specs()
+    print(f"scanned_layers:")
+    pprint(scanned_layers, width=120)
 
     optimizer = kron(
         learning_rate=0.001,
