@@ -19,6 +19,9 @@ from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
 
 
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=16"
+
+
 def precond_update_prob_schedule(
     max_prob=1.0, min_prob=0.03, decay=0.001, flat_start=500
 ):
@@ -1287,8 +1290,10 @@ def profile_kron():
     print(f"mesh: {mesh}")
 
     rng = jax.random.PRNGKey(0)
-    hidden_dim = 2048
-    num_layers = 4
+    hidden_dim = 16
+    num_layers = 2
+    block_size = 32
+    do_profiling = False
 
     def create_fake_params():
         params = []
@@ -1296,7 +1301,7 @@ def profile_kron():
             layer_params = {
                 "attention": {
                     "qkv": jax.random.normal(rng, (2, hidden_dim, 3 * hidden_dim)),
-                    "output": jax.random.normal(rng, (2, hidden_dim, hidden_dim)),
+                    "output": jax.random.normal(rng, (2, 3 * hidden_dim, hidden_dim)),
                 },
                 "mlp": {
                     "fc1": jax.random.normal(rng, (2, hidden_dim, 4 * hidden_dim)),
@@ -1345,40 +1350,76 @@ def profile_kron():
         merge_small_dims=True,
         target_merged_dim_size=2048,
         partition_grads_into_blocks=True,
-        block_size=512,
+        block_size=block_size,
         params_sharding=params_sharding,
-        preconditioner_sharding=PartitionSpec("data", "model"),
+        preconditioner_sharding=None,  # PartitionSpec("data", "model"),
         scanned_layers=scanned_layers,
-        lax_map_scanned_layers=True,
+        lax_map_scanned_layers=False,
         lax_map_batch_size=8,
     )
 
     with mesh:
         opt_state = optimizer.init(params)
+        print(f"opt_state:")
+        pprint(jax.tree.map(lambda x: x.shape, opt_state), width=120)
 
-    grads = jax.tree.map(lambda x: jax.random.normal(rng, x.shape, x.dtype), params)
+        # Create consistent sharding for scalar values in opt_state
+        mesh_sharding = jax.sharding.NamedSharding(mesh, PartitionSpec())
+        
+        # Update opt_state sharding to ensure scalars are replicated across all devices
+        def update_sharding(x):
+            if isinstance(x, jax.Array) and x.ndim == 0:  # scalar
+                return mesh_sharding
+            return x.sharding if isinstance(x, jax.Array) else None
+            
+        opt_state_sharding = jax.tree.map(update_sharding, opt_state)
+        print(f"opt_state_sharding:")
+        pprint(opt_state_sharding, width=120)
+        
+        # Apply the updated sharding to opt_state
+        opt_state = jax.tree.map(
+            lambda x, s: jax.device_put(x, s) if s is not None else x,
+            opt_state,
+            opt_state_sharding
+        )
 
-    @jax.jit
-    def opt_step(opt_state, grads):
-        updates, new_state = optimizer.update(grads, opt_state, params)
-        return new_state
+        grads = jax.tree.map(lambda x: jax.random.normal(rng, x.shape, x.dtype), params)
+        
+        # Convert PartitionSpec to NamedSharding for grads
+        grads_shardings = jax.tree.map(
+            lambda ps: jax.sharding.NamedSharding(mesh, ps) if ps is not None else mesh_sharding,
+            params_sharding
+        )
 
-    with mesh:
-        state = opt_step(opt_state, grads)
+        @partial(
+            jax.jit,
+            donate_argnums=0,
+            in_shardings=(opt_state_sharding, grads_shardings),
+            out_shardings=(opt_state_sharding, grads_shardings),
+        )
+        def opt_step(opt_state, grads):
+            updates, new_state = optimizer.update(grads, opt_state, params)
+            return new_state, updates
 
-    for step in range(20):
-        if step == 5:
-            jax.profiler.start_trace("gs://optimizertesting/kron_profile")
+        state, updates = opt_step(opt_state, grads)
 
-        with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
-            print(f"step {step}")
-            with mesh:
-                state = opt_step(state, grads)
+        for step in range(15):
+            if step == 5 and do_profiling:
+                jax.profiler.start_trace("gs://optimizertesting/kron_profile")
 
-        if step == 10:
-            jax.profiler.stop_trace()
+            with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
+                print(f"step {step}")
+                state, updates = opt_step(state, grads)
 
-    print("Profiling completed. Data saved to gs://optimizertesting/kron_profile")
+            if step == 10 and do_profiling:
+                jax.profiler.stop_trace()
+
+        print("Profiling completed. Data saved to gs://optimizertesting/kron_profile")
+
+        print("final updates sharding:")
+        pprint(jax.tree.map(lambda x: x.sharding, updates), width=120)
+        print("final opt_state sharding:")
+        pprint(opt_state_sharding, width=120)
 
 
 if __name__ == "__main__":
