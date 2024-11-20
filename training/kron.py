@@ -1280,7 +1280,7 @@ def profile_kron():
     devices = jax.devices()
     mesh_shape = (len(devices) // 2, 2)
     device_mesh = np.array(devices).reshape(mesh_shape)
-    mesh = jax.sharding.Mesh(device_mesh, ('data', 'model'))
+    mesh = jax.sharding.Mesh(device_mesh, ("data", "model"))
 
     rng = jax.random.PRNGKey(0)
     hidden_dim = 4096
@@ -1290,41 +1290,35 @@ def profile_kron():
         params = []
         for _ in range(num_layers):
             layer_params = {
-                'attention': {
-                    'qkv': jax.random.normal(rng, (hidden_dim, 3 * hidden_dim)),
-                    'output': jax.random.normal(rng, (hidden_dim, hidden_dim)),
+                "attention": {
+                    "qkv": jax.random.normal(rng, (hidden_dim, 3 * hidden_dim)),
+                    "output": jax.random.normal(rng, (hidden_dim, hidden_dim)),
                 },
-                'mlp': {
-                    'fc1': jax.random.normal(rng, (hidden_dim, 4 * hidden_dim)),
-                    'fc2': jax.random.normal(rng, (4 * hidden_dim, hidden_dim)),
-                }
+                "mlp": {
+                    "fc1": jax.random.normal(rng, (hidden_dim, 4 * hidden_dim)),
+                    "fc2": jax.random.normal(rng, (4 * hidden_dim, hidden_dim)),
+                },
             }
             params.append(layer_params)
         return params
 
     def create_sharding_specs():
         layer_spec = {
-            'attention': {
-                'qkv': PartitionSpec('model', 'data'),
-                'output': PartitionSpec('data', 'model'),
+            "attention": {
+                "qkv": PartitionSpec("model", "data"),
+                "output": PartitionSpec("data", "model"),
             },
-            'mlp': {
-                'fc1': PartitionSpec('model', 'data'),
-                'fc2': PartitionSpec('data', 'model'),
-            }
+            "mlp": {
+                "fc1": PartitionSpec("model", "data"),
+                "fc2": PartitionSpec("data", "model"),
+            },
         }
         return [layer_spec for _ in range(num_layers)]
 
     def create_scan_specs():
         layer_spec = {
-            'attention': {
-                'qkv': True,
-                'output': True,
-            },
-            'mlp': {
-                'fc1': True,
-                'fc2': True,
-            }
+            "attention": {"qkv": True, "output": True},
+            "mlp": {"fc1": True, "fc2": True},
         }
         return [layer_spec for _ in range(num_layers)]
 
@@ -1337,13 +1331,13 @@ def profile_kron():
         b1=0.9,
         normalize_grads=True,
         preconditioner_update_probability=1.0,
-        memory_save_mode='one_diag',
+        memory_save_mode="one_diag",
         merge_small_dims=True,
         target_merged_dim_size=2048,
         partition_grads_into_blocks=True,
         block_size=512,
         params_sharding=params_sharding,
-        preconditioner_sharding=PartitionSpec('data', 'model'),
+        preconditioner_sharding=PartitionSpec("data", "model"),
         scanned_layers=scanned_layers,
         lax_map_scanned_layers=True,
         lax_map_batch_size=8,
@@ -1372,6 +1366,7 @@ def profile_kron():
 
         if step == 10:
             jax.profiler.stop_trace()
+
 
 if __name__ == "__main__":
     profile_kron()
