@@ -1309,12 +1309,12 @@ def profile_kron():
     def create_sharding_specs():
         layer_spec = {
             "attention": {
-                "qkv": PartitionSpec("model", "data"),
-                "output": PartitionSpec("data", "model"),
+                "qkv": PartitionSpec(None, "model", "data"),
+                "output": PartitionSpec(None, "data", "model"),
             },
             "mlp": {
-                "fc1": PartitionSpec("model", "data"),
-                "fc2": PartitionSpec("data", "model"),
+                "fc1": PartitionSpec(None, "model", "data"),
+                "fc2": PartitionSpec(None, "data", "model"),
             },
         }
         return [layer_spec for _ in range(num_layers)]
@@ -1328,7 +1328,7 @@ def profile_kron():
 
     params = create_fake_params()
     print(f"params:")
-    pprint(params, width=120)
+    pprint(jax.tree.map(lambda x: x.shape, params), width=120)
     params_sharding = create_sharding_specs()
     print(f"params_sharding:")
     pprint(params_sharding, width=120)
