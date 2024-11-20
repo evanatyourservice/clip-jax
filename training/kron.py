@@ -1293,7 +1293,7 @@ def profile_kron():
     hidden_dim = 2000
     num_layers = 8
     block_size = 512
-    do_profiling = False
+    do_profiling = True
 
     def create_fake_params():
         params = []
