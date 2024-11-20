@@ -1335,8 +1335,6 @@ def main():
                 opt_state,
                 is_leaf=lambda x: isinstance(x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)),
             )
-            print("opt_state_spec")
-            pprint(opt_state_spec, width=120)
         else:
             opt_state = init_opt_state(params)
 
