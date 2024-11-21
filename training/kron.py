@@ -1279,7 +1279,13 @@ def _unstack_matrices(stacked_arrays, revert_indices):
     return array_list
 
 
-def profile_kron():
+def profile_kron(
+    out_dir: str = "gs://optimizertesting/kron_profile",
+    hidden_dim: int = 2000,
+    block_size: int = 512,
+    do_profiling: bool = True,
+    preconditioner_sharding: Optional[PartitionSpec] = None,  # PartitionSpec("data", "model"),
+):
     from pprint import pprint
 
     devices = jax.devices()
@@ -1290,56 +1296,21 @@ def profile_kron():
     print(f"mesh: {mesh}")
 
     rng = jax.random.PRNGKey(0)
-    hidden_dim = 2000
-    num_layers = 3
-    block_size = 512
-    do_profiling = True
 
-    def create_fake_params():
-        params = []
-        for _ in range(num_layers):
-            layer_params = {
-                "attention": {
-                    "qkv": jax.random.normal(rng, (2, hidden_dim, 3 * hidden_dim)),
-                    "output": jax.random.normal(rng, (2, 3 * hidden_dim, hidden_dim)),
-                },
-                "mlp": {
-                    "fc1": jax.random.normal(rng, (2, hidden_dim, 3 * hidden_dim)),
-                    "fc2": jax.random.normal(rng, (2, 3 * hidden_dim, hidden_dim)),
-                },
-            }
-            params.append(layer_params)
-        return params
-
-    def create_sharding_specs():
-        layer_spec = {
-            "attention": {
-                "qkv": PartitionSpec(None, "model", "data"),
-                "output": PartitionSpec(None, "data", "model"),
-            },
-            "mlp": {
-                "fc1": PartitionSpec(None, "model", "data"),
-                "fc2": PartitionSpec(None, "data", "model"),
-            },
-        }
-        return [layer_spec for _ in range(num_layers)]
-
-    def create_scan_specs():
-        layer_spec = {
-            "attention": {"qkv": True, "output": True},
-            "mlp": {"fc1": True, "fc2": True},
-        }
-        return [layer_spec for _ in range(num_layers)]
-
-    params = create_fake_params()
+    # Single tensor params
+    params = {"w1": jax.random.normal(rng, (2, hidden_dim, hidden_dim))}
     print(f"params:")
-    pprint(jax.tree.map(lambda x: x.shape, params), width=120)
-    params_sharding = create_sharding_specs()
+    pprint(jax.tree.map(lambda x: x.shape, params))
+
+    # Single tensor sharding
+    params_sharding = {"w1": PartitionSpec(None, "model", "data")}
     print(f"params_sharding:")
-    pprint(params_sharding, width=120)
-    scanned_layers = create_scan_specs()
+    pprint(params_sharding)
+
+    # Single tensor scan spec
+    scanned_layers = {"w1": True}
     print(f"scanned_layers:")
-    pprint(scanned_layers, width=120)
+    pprint(scanned_layers)
 
     optimizer = kron(
         learning_rate=0.001,
@@ -1352,7 +1323,7 @@ def profile_kron():
         partition_grads_into_blocks=True,
         block_size=block_size,
         params_sharding=params_sharding,
-        preconditioner_sharding=None,  # PartitionSpec("data", "model"),
+        preconditioner_sharding=preconditioner_sharding,
         scanned_layers=scanned_layers,
         lax_map_scanned_layers=False,
         lax_map_batch_size=8,
@@ -1365,17 +1336,17 @@ def profile_kron():
 
         # Create consistent sharding for scalar values in opt_state
         mesh_sharding = jax.sharding.NamedSharding(mesh, PartitionSpec())
-        
+
         # Update opt_state sharding to ensure scalars are replicated across all devices
         def update_sharding(x):
             if isinstance(x, jax.Array) and x.ndim == 0:  # scalar
                 return mesh_sharding
             return x.sharding if isinstance(x, jax.Array) else None
-            
+
         opt_state_sharding = jax.tree.map(update_sharding, opt_state)
         print(f"opt_state_sharding:")
         pprint(opt_state_sharding, width=120)
-        
+
         # Apply the updated sharding to opt_state
         opt_state = jax.tree.map(
             lambda x, s: jax.device_put(x, s) if s is not None else x,
@@ -1384,7 +1355,7 @@ def profile_kron():
         )
 
         grads = jax.tree.map(lambda x: jax.random.normal(rng, x.shape, x.dtype), params)
-        
+
         # Convert PartitionSpec to NamedSharding for grads
         grads_shardings = jax.tree.map(
             lambda ps: jax.sharding.NamedSharding(mesh, ps) if ps is not None else mesh_sharding,
@@ -1405,7 +1376,7 @@ def profile_kron():
 
         for step in range(15):
             if step == 5 and do_profiling:
-                jax.profiler.start_trace("gs://optimizertesting/kron_profile")
+                jax.profiler.start_trace(out_dir)
 
             with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
                 print(f"step {step}")
@@ -1414,7 +1385,7 @@ def profile_kron():
             if step == 10 and do_profiling:
                 jax.profiler.stop_trace()
 
-        print("Profiling completed. Data saved to gs://optimizertesting/kron_profile")
+        print(f"Profiling completed. Data saved to {out_dir}")
 
         print("final updates sharding:")
         pprint(jax.tree.map(lambda x: x.sharding, updates), width=120)
@@ -1423,4 +1394,9 @@ def profile_kron():
 
 
 if __name__ == "__main__":
-    profile_kron()
+    profile_kron(
+        out_dir="gs://optimizertesting/kron_profile",
+        hidden_dim=2000,
+        block_size=512,
+        do_profiling=True,
+    )
