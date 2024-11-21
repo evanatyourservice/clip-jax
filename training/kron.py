@@ -226,7 +226,7 @@ def scale_by_kron(
             for p, dd, sh in zip(params_without_scan, dim_diag, sharding_without_scan)
         ]
         Qs = [x[0] for x in output]
-        Qs_sharding = [x[2] for x in output]
+        Qs_sharding_no_leading_dims = [x[2] for x in output]
         if have_qs_sharding:
             # add scan and stack dims to sharding
             Qs_sharding = [
@@ -248,7 +248,7 @@ def scale_by_kron(
                     if qss is not None
                     else None
                 )
-                for sds, qss in zip(scanned_dim_sharding, Qs_sharding)
+                for sds, qss in zip(scanned_dim_sharding, Qs_sharding_no_leading_dims)
             ]
         # broadcast for stacks and scans
         all_Qs = []
@@ -487,8 +487,8 @@ def scale_by_kron(
             )
         ]  # list of lists
         expressions = [x[0] for x in exprs_and_sharding]
+        Qs_sharding_no_leading_dims = [x[1] for x in exprs_and_sharding]
         if have_qs_sharding:
-            Qs_sharding = [x[1] for x in exprs_and_sharding]
             # add scan and stack dims to sharding
             Qs_sharding = [
                 (
@@ -509,7 +509,7 @@ def scale_by_kron(
                     if qss is not None
                     else None
                 )
-                for sds, qss in zip(scanned_dim_sharding, Qs_sharding)
+                for sds, qss in zip(scanned_dim_sharding, Qs_sharding_no_leading_dims)
             ]
 
         # maybe update preconditioner
@@ -548,8 +548,6 @@ def scale_by_kron(
                     _map_fn(lax_map, bs, nm, _conjB, Q, g, v)
                     for g, Q, v, nm in zip(momentum_updates, Qs, Vs, n_dims_to_map)
                 ]
-                # if have_params_sharding:
-                #     conjBs = safe_sharding_constraint(conjBs, partitioned_sharding)
 
                 # update Qs and constrain sharding
                 new_Qs = [
@@ -558,14 +556,14 @@ def scale_by_kron(
                         bs,
                         nm,
                         partial(
-                            _update_precond, exprs=expr_sh, precond_lr=preconditioner_lr
+                            _update_precond, exprs=expr_sh, precond_lr=preconditioner_lr, qs_sharding=qss
                         ),
                         Q,
                         g,
                         conjb,
                     )
-                    for expr_sh, g, Q, conjb, nm in zip(
-                        expressions, momentum_updates, Qs, conjBs, n_dims_to_map
+                    for expr_sh, g, Q, conjb, nm, qss in zip(
+                        expressions, momentum_updates, Qs, conjBs, n_dims_to_map, Qs_sharding_no_leading_dims
                     )
                 ]
                 return new_Qs
@@ -987,7 +985,7 @@ def _conjB(Q, G, V):
     return conjB
 
 
-def _update_precond(Q, G, conjB, exprs, precond_lr):
+def _update_precond(Q, G, conjB, exprs, precond_lr, qs_sharding):
     """Compute A and update Q."""
     exprA, exprGs, _ = exprs
 
@@ -1008,6 +1006,16 @@ def _update_precond(Q, G, conjB, exprs, precond_lr):
                 * q
             )
         else:
+            if qs_sharding is not None:
+                sharding = qs_sharding[i]
+                # transpose q sharding for terms
+                if len(sharding) < 2:
+                    sharding = PartitionSpec(*((None,) + sharding))
+                else:
+                    assert len(sharding) == 2
+                    sharding = PartitionSpec(*(sharding[1:] + sharding[:1]))
+                term1 = safe_sharding_constraint(term1, sharding)
+                term2 = safe_sharding_constraint(term2, sharding)
             q -= (
                 precond_lr
                 / _add_tiny(_norm_lower_bound(term1 + term2))
@@ -1280,16 +1288,16 @@ def _unstack_matrices(stacked_arrays, revert_indices):
 
 
 def profile_kron(
-    out_dir: str = "gs://optimizertesting/kron_profile",
+    out_dir: str = "/tmp/kron_profile",
     hidden_dim: int = 2000,
+    num_layers: int = 2,
     block_size: int = 512,
     do_profiling: bool = True,
-    preconditioner_sharding: Optional[PartitionSpec] = None,  # PartitionSpec("data", "model"),
+    preconditioner_sharding: Optional[PartitionSpec] = PartitionSpec("data", "model"),
 ):
     import os
     import time
     from pprint import pprint
-    from jax.sharding import NamedSharding as NS
 
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
@@ -1303,15 +1311,57 @@ def profile_kron(
 
     rng = jax.random.PRNGKey(0)
 
-    params = {"w1": jax.random.normal(rng, (2, hidden_dim, hidden_dim))}
+    def create_fake_params():
+        params = []
+        for _ in range(num_layers):
+            layer_params = {
+                "attention": {
+                    "qkv": jax.random.normal(rng, (2, hidden_dim, 2 * hidden_dim)),
+                    "output": jax.random.normal(rng, (2, 2 * hidden_dim, hidden_dim)),
+                },
+                "mlp": {
+                    "fc1": jax.random.normal(rng, (2, hidden_dim, 2 * hidden_dim)),
+                    "fc2": jax.random.normal(rng, (2, 2 * hidden_dim, hidden_dim)),
+                },
+            }
+            params.append(layer_params)
+        return params
+
+    def create_sharding_spec():
+        layer_spec = {
+            "attention": {
+                "qkv": PartitionSpec(None, "data", "model"),
+                "output": PartitionSpec(None, "model", "data"),
+            },
+            "mlp": {
+                "fc1": PartitionSpec(None, "data", "model"),
+                "fc2": PartitionSpec(None, "model", "data"),
+            },
+        }
+        return [layer_spec for _ in range(num_layers)]
+
+    def create_scanned_spec():
+        layer_spec = {
+            "attention": {
+                "qkv": True,
+                "output": True,
+            },
+            "mlp": {
+                "fc1": True,
+                "fc2": True,
+            },
+        }
+        return [layer_spec for _ in range(num_layers)]
+
+    params = create_fake_params()
     print(f"params:")
     pprint(jax.tree.map(lambda x: x.shape, params), width=120)
 
-    params_sharding = {"w1": PartitionSpec(None, "data", "model")}
+    params_sharding = create_sharding_spec()
     print(f"params_sharding:")
     pprint(params_sharding, width=120)
 
-    scanned_layers = {"w1": True}
+    scanned_layers = create_scanned_spec()
     print(f"scanned_layers:")
     pprint(scanned_layers, width=120)
 
@@ -1343,12 +1393,7 @@ def profile_kron(
         print(f"opt_state_sharding:")
         pprint(opt_state_sharding, width=120)
 
-        @partial(
-            jax.jit,
-            donate_argnums=0,
-            #in_shardings=(opt_state_sharding, grads_shardings),
-            # out_shardings=(opt_state_sharding, grads_shardings),
-        )
+        @partial(jax.jit, donate_argnums=0)
         def opt_step(grads, opt_state):
             return optimizer.update(grads, opt_state, params)
 
@@ -1365,17 +1410,18 @@ def profile_kron(
         print(f"Compile time: {end_time - start_time} seconds")
 
         for step in range(15):
-            if step == 5 and do_profiling:
-                jax.profiler.start_trace(out_dir)
+            print(f"step {step}")
 
-            grads_in = fake_grads()
+            if do_profiling:
+                if step == 5:
+                    jax.profiler.start_trace(out_dir)
+                if step == 10:
+                    jax.profiler.stop_trace()
+
+            grads_in = jax.block_until_ready(fake_grads())
 
             with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
-                print(f"step {step}")
-                updates, opt_state = opt_step(grads_in, opt_state)
-
-            if step == 10 and do_profiling:
-                jax.profiler.stop_trace()
+                updates, opt_state = jax.block_until_ready(opt_step(grads_in, opt_state))
 
         if do_profiling:
             print(f"Profiling completed. Data saved to {out_dir}")
@@ -1389,7 +1435,11 @@ def profile_kron(
 if __name__ == "__main__":
     profile_kron(
         out_dir="/tmp/kron_profile",
-        hidden_dim=16,
-        block_size=16,
-        do_profiling=False,
+        hidden_dim=2000,
+        num_layers=2,
+        block_size=1024,
+        do_profiling=True,
+        # if manually setting precond sharding, set first dim to fsdp-like mesh axis
+        # (i.e. it should be a common mesh axis in params and a large mesh axis)
+        preconditioner_sharding=PartitionSpec("data", "model"),
     )
