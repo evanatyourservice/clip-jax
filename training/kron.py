@@ -7,10 +7,10 @@ import numpy as np
 
 import chex
 import jax
-from jax import vmap
-import jax.numpy as jnp
+from jax import numpy as jnp, vmap
 from jax.sharding import PartitionSpec
 from jax.lax import with_sharding_constraint
+from jax._src import mesh as mesh_lib
 import flax.linen as nn
 from optax import tree_utils as otu
 from optax._src import base, transform
@@ -20,6 +20,9 @@ from optax._src.combine import chain
 
 
 os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=16"
+
+
+# TODO testing cases, ndim=0, size=1/ndim=1, other sizes, all combos
 
 
 def precond_update_prob_schedule(
@@ -65,6 +68,7 @@ def scale_by_kron(
     target_merged_dim_size: int = 2048,
     partition_grads_into_blocks: bool = False,
     block_size: int = 512,
+    buffer_qqconj: bool = True,
     params_sharding: Optional[Any] = None,
     preconditioner_sharding: Optional[PartitionSpec[str, str]] = None,
 ) -> base.GradientTransformationExtraArgs:
@@ -103,6 +107,7 @@ def scale_by_kron(
         partition_grads_into_blocks: bool, whether to partition grads into chunks of
             size `block_size` for memory efficiency.
         block_size: int, size of partitions to use for memory efficiency.
+        buffer_qqconj: bool, whether to buffer qqconj for faster preconditioning.
         params_sharding: pytree same structure as params of PartitionSpec.
         preconditioner_sharding: partition spec for preconditioner matrices
             PartitionSpec(str | None, str | None).
@@ -118,6 +123,19 @@ def scale_by_kron(
     bs = lax_map_batch_size
 
     def init_fn(params):
+        current_mesh = mesh_lib.thread_resources.env.physical_mesh
+        if (
+            current_mesh.empty
+            and buffer_qqconj
+            and any([params_sharding is not None, preconditioner_sharding is not None])
+            and jax.process_index() == 0
+        ):
+            print(
+                "PSGD Kron WARNING: buffering QQconj with sharding but Mesh is empty. "
+                "Consider running Kron within a mesh context manager `with mesh:` or "
+                "setting buffer_qqconj=False to prevent potential sharding inefficiencies. "
+                "If only using replicated sharding, you can ignore this warning."
+            )
         have_params_sharding = params_sharding is not None
         have_qs_sharding = have_params_sharding or preconditioner_sharding is not None
 
@@ -160,7 +178,7 @@ def scale_by_kron(
             mu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=mu_dtype), params)
             # apply params sharding to momentum buffer
             if have_params_sharding:
-                mu = safe_sharding_constraint(mu, params_sharding_)
+                mu = _safe_sharding_constraint(mu, params_sharding_)
 
         params, params_struct = jax.tree.flatten(params)
         scanned_layers_ = params_struct.flatten_up_to(scanned_layers_)
@@ -222,11 +240,14 @@ def scale_by_kron(
                 precond_dtype,
                 precond_sharding=preconditioner_sharding,
                 param_sharding=sh,
+                buffer_qqconj=buffer_qqconj,
+                current_mesh=current_mesh,
             )
             for p, dd, sh in zip(params_without_scan, dim_diag, sharding_without_scan)
         ]
         Qs = [x[0] for x in output]
         Qs_sharding_no_leading_dims = [x[2] for x in output]
+        Qs_sharding = None
         if have_qs_sharding:
             # add scan and stack dims to sharding
             Qs_sharding = [
@@ -269,7 +290,7 @@ def scale_by_kron(
         # for a stacked and scanned layer, it now has two leading dims to be vmapped
         Qs = all_Qs
         if have_qs_sharding:
-            Qs = safe_sharding_constraint(Qs, Qs_sharding)
+            Qs = _safe_sharding_constraint(Qs, Qs_sharding)
         Qs = params_struct.unflatten(Qs)
 
         # Calculate sizes for nu (preconditioner) and mu (momentum)
@@ -360,12 +381,11 @@ def scale_by_kron(
         if state["mu"] is not None:
             mu = otu.tree_update_moment(updates, state["mu"], b1, 1)
             if have_params_sharding:
-                mu = safe_sharding_constraint(mu, params_sharding_)
+                mu = _safe_sharding_constraint(mu, params_sharding_)
             momentum_updates = otu.tree_bias_correction(mu, b1, count_inc)
 
         # flatten pytrees
-        updates, grads_structure = jax.tree.flatten(updates)
-        momentum_updates = grads_structure.flatten_up_to(momentum_updates)
+        momentum_updates, grads_structure = jax.tree.flatten(momentum_updates)
         Qs = grads_structure.flatten_up_to(state["Qs_preconditioners"])
         scanned_layers_ = grads_structure.flatten_up_to(scanned_layers_)
         dim_diag = [
@@ -375,7 +395,7 @@ def scale_by_kron(
                 min_ndim_triangular,
                 memory_save_mode,
             )
-            for p, s in zip(updates, scanned_layers_)
+            for p, s in zip(momentum_updates, scanned_layers_)
         ]  # tuple of lists of booleans, one bool per dim indicating diag preconds
         params_sharding_ = grads_structure.flatten_up_to(params_sharding_)
         scanned_dim_sharding = [
@@ -389,6 +409,7 @@ def scale_by_kron(
 
         # merge dimensions
         merged_params_sharding = params_sharding_
+        original_shapes = None
         if merge_small_dims:
             original_shapes = [
                 p.shape[1:] if s else p.shape
@@ -414,13 +435,15 @@ def scale_by_kron(
                     for sds, sws in zip(scanned_dim_sharding, sharding_without_scan)
                 ]
                 # constrain sharding
-                momentum_updates = safe_sharding_constraint(
+                momentum_updates = _safe_sharding_constraint(
                     momentum_updates, merged_params_sharding
                 )
 
         # partition grads into blocks
         partitioned_sharding = merged_params_sharding
         n_dims_to_map = [int(s) for s in scanned_layers_]
+        partitioners = None
+        partitioned_shapes = None
         if partition_grads_into_blocks:
             partitioners = [
                 BlockPartitioner(p.shape[1:] if s else p.shape, block_size, dd)
@@ -438,7 +461,7 @@ def scale_by_kron(
             if have_params_sharding:
                 # constrain partitions to same sharding as entire layer
                 momentum_updates = [
-                    jax.tree.map(lambda x: safe_sharding_constraint(x, mps), p)
+                    jax.tree.map(lambda x: _safe_sharding_constraint(x, mps), p)
                     for p, mps in zip(momentum_updates, merged_params_sharding)
                 ]
             # pad and stack tuples of partitions into single array
@@ -465,7 +488,7 @@ def scale_by_kron(
                     for s, mps in zip(scanned_layers_, merged_params_sharding)
                 ]
                 # constrain sharding
-                momentum_updates = safe_sharding_constraint(
+                momentum_updates = _safe_sharding_constraint(
                     momentum_updates, partitioned_sharding
                 )
             n_dims_to_map = [1 + int(s) for s in scanned_layers_]
@@ -481,6 +504,7 @@ def scale_by_kron(
                 existing_Q=jax.tree.map(lambda q: _first_n_dims(q, nm), q),
                 precond_sharding=preconditioner_sharding,
                 param_sharding=sh,
+                buffer_qqconj=buffer_qqconj,
             )
             for g, q, dd, sh, nm in zip(
                 momentum_updates, Qs, dim_diag, sharding_without_scan, n_dims_to_map
@@ -512,15 +536,48 @@ def scale_by_kron(
                 for sds, qss in zip(scanned_dim_sharding, Qs_sharding_no_leading_dims)
             ]
 
+        # pad sizes for buffering qqconj
+        pad_sizes = [
+            [
+                q.shape[nm] - dim
+                for q, dim in zip(qs, p.shape[nm:])
+            ]
+            for qs, p, nm in zip(Qs, momentum_updates, n_dims_to_map)
+        ]
+
         # maybe update preconditioner
         def update_preconditioner(key, Qs):
             with jax.default_matmul_precision(precond_update_precision):
+                # separate out q if we're buffering qqconj
+                if buffer_qqconj:
+                    Qs = [
+                        [
+                            (
+                                _map_fn(
+                                    False,
+                                    0,
+                                    nm,
+                                    lambda q, pad_size=ps: _get_q(q, pad_size),
+                                    q,
+                                )
+                                if not d
+                                else q
+                            )
+                            for q, d, ps in zip(qs, dd, pad_size)
+                        ]
+                        for qs, nm, dd, pad_size in zip(
+                            Qs, n_dims_to_map, dim_diag, pad_sizes
+                        )
+                    ]
+                    if have_qs_sharding:
+                        Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+
                 # create random vectors
                 key, subkey = jax.random.split(key)
                 Vs = _tree_random_like(subkey, momentum_updates)
                 # apply params sharding to random vectors
                 if have_params_sharding:
-                    Vs = safe_sharding_constraint(Vs, partitioned_sharding)
+                    Vs = _safe_sharding_constraint(Vs, partitioned_sharding)
 
                 # balance preconditioners about every 100 updates
                 def balance_Qs(Qs_to_bal):
@@ -541,7 +598,7 @@ def scale_by_kron(
                 do_balances = jax.random.uniform(subkey) <= 0.01
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
                 if have_qs_sharding:
-                    Qs = safe_sharding_constraint(Qs, Qs_sharding)
+                    Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
                 # form conjB
                 conjBs = [
@@ -556,16 +613,46 @@ def scale_by_kron(
                         bs,
                         nm,
                         partial(
-                            _update_precond, exprs=expr_sh, precond_lr=preconditioner_lr, qs_sharding=qss
+                            _update_precond,
+                            exprs=expr,
+                            precond_lr=preconditioner_lr,
+                            qs_sharding=qss,
                         ),
                         Q,
                         g,
                         conjb,
                     )
-                    for expr_sh, g, Q, conjb, nm, qss in zip(
-                        expressions, momentum_updates, Qs, conjBs, n_dims_to_map, Qs_sharding_no_leading_dims
+                    for expr, g, Q, conjb, nm, qss in zip(
+                        expressions,
+                        momentum_updates,
+                        Qs,
+                        conjBs,
+                        n_dims_to_map,
+                        Qs_sharding_no_leading_dims,
                     )
                 ]
+
+                if buffer_qqconj:
+                    # store half of qqconj in lower triangular part of Qs (Q is triu)
+                    new_Qs = [
+                        [
+                            (
+                                _map_fn(
+                                    False,
+                                    0,
+                                    nm,
+                                    lambda q, pad_size=ps: _store_qqconj(q, pad_size),
+                                    q,
+                                )
+                                if not d
+                                else q
+                            )
+                            for q, d, ps in zip(qs, dd, pad_size)
+                        ]
+                        for qs, nm, dd, pad_size in zip(
+                            new_Qs, n_dims_to_map, dim_diag, pad_sizes
+                        )
+                    ]
                 return new_Qs
 
         # update preconditioner deterministically
@@ -577,19 +664,31 @@ def scale_by_kron(
             do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
         )
         if have_qs_sharding:
-            new_Qs = safe_sharding_constraint(new_Qs, Qs_sharding)
+            new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
 
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
             # precondition with stale Qs
             precond_gs = [
-                _map_fn(lax_map, bs, nm, partial(_precond_grad, exprs=expr_sh), Q, g)
-                for expr_sh, g, Q, nm in zip(
-                    expressions, momentum_updates, Qs, n_dims_to_map
+                _map_fn(
+                    lax_map,
+                    bs,
+                    nm,
+                    partial(
+                        _precond_grad,
+                        exprs=expr,
+                        buffer_qqconj=buffer_qqconj,
+                        pad_sizes=pss,
+                    ),
+                    Q,
+                    g,
+                )
+                for expr, g, Q, nm, pss in zip(
+                    expressions, momentum_updates, Qs, n_dims_to_map, pad_sizes
                 )
             ]
             if have_params_sharding:
-                precond_gs = safe_sharding_constraint(precond_gs, partitioned_sharding)
+                precond_gs = _safe_sharding_constraint(precond_gs, partitioned_sharding)
 
         # unstack and merge partitioned grads
         if partition_grads_into_blocks:
@@ -605,7 +704,7 @@ def scale_by_kron(
             ]  # list of tuples
             if have_params_sharding:
                 precond_gs = [
-                    jax.tree.map(lambda x: safe_sharding_constraint(x, mps), p)
+                    jax.tree.map(lambda x: _safe_sharding_constraint(x, mps), p)
                     for p, mps in zip(precond_gs, merged_params_sharding)
                 ]
             precond_gs = [
@@ -613,7 +712,7 @@ def scale_by_kron(
                 for s, p, part in zip(scanned_layers_, precond_gs, partitioners)
             ]
             if have_params_sharding:
-                precond_gs = safe_sharding_constraint(
+                precond_gs = _safe_sharding_constraint(
                     precond_gs, merged_params_sharding
                 )
 
@@ -624,7 +723,7 @@ def scale_by_kron(
                 for s, os, p in zip(scanned_layers_, original_shapes, precond_gs)
             ]
             if have_params_sharding:
-                precond_gs = safe_sharding_constraint(precond_gs, params_sharding_)
+                precond_gs = _safe_sharding_constraint(precond_gs, params_sharding_)
 
         # box preconditioned grads
         if flax_partitioned:
@@ -674,6 +773,7 @@ def kron(
     target_merged_dim_size: int = 2048,
     partition_grads_into_blocks: bool = False,
     block_size: int = 512,
+    buffer_qqconj: bool = True,
     params_sharding: Optional[Any] = None,
     preconditioner_sharding: Optional[PartitionSpec[str, str]] = None,
 ) -> base.GradientTransformationExtraArgs:
@@ -716,6 +816,7 @@ def kron(
         partition_grads_into_blocks: bool, whether to partition grads into chunks of
             size `block_size` for memory efficiency.
         block_size: int, size of partitions to use for memory efficiency.
+        buffer_qqconj: bool, whether to buffer qqconj for faster preconditioning.
         params_sharding: pytree same structure as params of PartitionSpec.
         preconditioner_sharding: partition spec for preconditioner matrices
             PartitionSpec(str | None, str | None).
@@ -742,6 +843,7 @@ def kron(
             target_merged_dim_size=target_merged_dim_size,
             partition_grads_into_blocks=partition_grads_into_blocks,
             block_size=block_size,
+            buffer_qqconj=buffer_qqconj,
             params_sharding=params_sharding,
             preconditioner_sharding=preconditioner_sharding,
         )
@@ -756,7 +858,7 @@ def _get_preconditioner_types(
     shape: Tuple[int, ...], max_size: int, min_ndim: int, mem_save_mode: Optional[str]
 ) -> List[bool]:
     if len(shape) == 0:
-        return True
+        return [True]
 
     if mem_save_mode is None:
         dim_diag = [False for _ in shape]
@@ -787,6 +889,8 @@ def _init_Q_exprs(
     existing_Q=None,
     precond_sharding=None,
     param_sharding=None,
+    buffer_qqconj=False,
+    current_mesh: Optional[jax.sharding.Mesh] = None,
 ):
     """For a scalar or tensor `t`, we initialize its preconditioner `Q` and
     reusable contraction expressions for updating `Q` and preconditioning gradient.
@@ -799,6 +903,8 @@ def _init_Q_exprs(
         existing_Q: Optional existing preconditioners to reuse
         precond_sharding: Optional sharding spec for preconditioners
         param_sharding: Optional sharding spec for input tensor
+        buffer_qqconj: bool, whether to buffer QQconj
+        current_mesh: Optional Mesh, current device mesh
     """
     have_qs_sharding = precond_sharding is not None or param_sharding is not None
     sharding_out = None
@@ -858,8 +964,10 @@ def _init_Q_exprs(
                 piece4P = piece4P + letters[i + 13]
             else:
                 # use triangular matrix as preconditioner for this dim
+                q_sharding = None
                 if have_qs_sharding:
                     # infer a so-so sharding scheme from params if nothing specified
+                    # (first dim of q will match corresponding dim in params)
                     q_sharding = (
                         precond_sharding
                         if precond_sharding is not None
@@ -869,7 +977,26 @@ def _init_Q_exprs(
                 if existing_Q is None:
                     q = scale * jnp.eye(size, dtype=dtype)
                     if have_qs_sharding:
-                        q = safe_sharding_constraint(q, q_sharding)
+                        q = _safe_sharding_constraint(q, q_sharding)
+
+                    # we can optionally store q @ q.conj in tril for later
+                    if buffer_qqconj:
+                        pad_size = 1
+                        if have_qs_sharding and current_mesh is not None:
+                            # pad size will be largest mesh axis size in q sharding
+                            axis_sizes = [pad_size]
+                            for ax in q_sharding:
+                                if ax is not None:
+                                    axis_tuple = ax if isinstance(ax, tuple) else (ax,)
+                                    axis_size = np.prod(
+                                        [current_mesh.shape[a] for a in axis_tuple]
+                                    )
+                                    axis_sizes.append(axis_size)
+                            pad_size = max(axis_sizes)
+                        q = _store_qqconj(q, pad_size)
+                        if have_qs_sharding:
+                            q = _safe_sharding_constraint(q, q_sharding)
+
                     Q.append(q)
 
                 piece1A.append(letters[i] + letters[i + 13])
@@ -893,20 +1020,43 @@ def _init_Q_exprs(
                 )
 
                 a, b, c = (letters[i], letters[i + 13], letters[i + 26])
-                piece1P.append(a + b)
+                piece1P.append(c + b if buffer_qqconj else a + b)
                 piece2P.append(a + c)
                 piece3P = piece3P + c
                 piece4P = piece4P + b
 
         exprA = ",".join(piece1A) + "," + piece2A + "->" + piece3A
-        exprP = (
-            ",".join(piece1P) + "," + ",".join(piece2P) + "," + piece3P + "->" + piece4P
-        )
+        if buffer_qqconj:
+            exprP = ",".join(piece1P) + "," + piece3P + "->" + piece4P
+        else:
+            exprP = (
+                ",".join(piece1P) + "," + ",".join(piece2P) + "," + piece3P + "->" + piece4P
+            )
 
     exprGs = tuple(exprGs)
     if existing_Q is not None:
         return (exprA, exprGs, exprP), sharding_out
     return Q, (exprA, exprGs, exprP), sharding_out
+
+
+def _store_qqconj(q, pad_size=1):
+    # after storing qqconj, precond update goes from
+    # an,bo,aA,bB,AB->no to cached:[aA,an->An, bB,bo->Bo], update:An,Bo,AB->no
+    qqconj = jnp.einsum("aA,an->An", q, q.conj())  # keep first dim as contracting
+    q = jnp.pad(q, ((0, pad_size), (pad_size, 0)))
+    qqconj = jnp.pad(qqconj, ((pad_size, 0), (0, pad_size)))
+    return q.at[jnp.tril_indices_from(q)].set(qqconj[jnp.tril_indices_from(qqconj)])
+
+
+def _get_qqconj(q, pad_size=1):
+    qqconj = jnp.tril(q[pad_size:, :-pad_size])
+    return qqconj.at[jnp.triu_indices_from(qqconj)].set(
+        qqconj.T[jnp.triu_indices_from(qqconj)]
+    )
+
+
+def _get_q(q, pad_size=1):
+    return jnp.triu(q[:-pad_size, pad_size:])
 
 
 def _norm_lower_bound(A: jax.Array):
@@ -1014,8 +1164,8 @@ def _update_precond(Q, G, conjB, exprs, precond_lr, qs_sharding):
                 else:
                     assert len(sharding) == 2
                     sharding = PartitionSpec(*(sharding[1:] + sharding[:1]))
-                term1 = safe_sharding_constraint(term1, sharding)
-                term2 = safe_sharding_constraint(term2, sharding)
+                term1 = _safe_sharding_constraint(term1, sharding)
+                term2 = _safe_sharding_constraint(term2, sharding)
             q -= (
                 precond_lr
                 / _add_tiny(_norm_lower_bound(term1 + term2))
@@ -1027,13 +1177,17 @@ def _update_precond(Q, G, conjB, exprs, precond_lr, qs_sharding):
     return [_update_single_q(i, q) for i, q in enumerate(Q)]
 
 
-def _precond_grad(Q, G, exprs):
+def _precond_grad(Q, G, exprs, buffer_qqconj=False, pad_sizes=None):
     """Precondition gradient G with preconditioner Q."""
     exprP = exprs[-1]
-    return jnp.einsum(exprP, *[q.conj() for q in Q], *Q, G)
+    if buffer_qqconj:
+        qqconjs = [_get_qqconj(q, ps) for q, ps in zip(Q, pad_sizes)]
+        return jnp.einsum(exprP, *qqconjs, G)
+    else:
+        return jnp.einsum(exprP, *[q.conj() for q in Q], *Q, G)
 
 
-def safe_sharding_constraint(x, sharding):
+def _safe_sharding_constraint(x, sharding):
     if sharding is None:
         return x
     else:
@@ -1140,13 +1294,13 @@ class BlockPartitioner:
         return partitions[0]
 
 
-def partitions(lst):
+def _partitions(lst):
     """Generate all partitions of a list."""
     if not lst:
         yield [[]]
     else:
         for i in range(len(lst)):
-            for part in partitions(lst[i + 1 :]):
+            for part in _partitions(lst[i + 1 :]):
                 yield [lst[: i + 1]] + part
 
 
@@ -1185,7 +1339,7 @@ def _merge_small_dims(
     best_loss = float("inf")
     best_partition = None
 
-    for p in partitions(list(range(len(shape_to_merge)))):
+    for p in _partitions(list(range(len(shape_to_merge)))):
         loss = 0
         merged = []
         for group in p:
@@ -1342,14 +1496,8 @@ def profile_kron(
 
     def create_scanned_spec():
         layer_spec = {
-            "attention": {
-                "qkv": True,
-                "output": True,
-            },
-            "mlp": {
-                "fc1": True,
-                "fc2": True,
-            },
+            "attention": {"qkv": True, "output": True},
+            "mlp": {"fc1": True, "fc2": True},
         }
         return [layer_spec for _ in range(num_layers)]
 
@@ -1421,7 +1569,9 @@ def profile_kron(
             grads_in = jax.block_until_ready(fake_grads())
 
             with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
-                updates, opt_state = jax.block_until_ready(opt_step(grads_in, opt_state))
+                updates, opt_state = jax.block_until_ready(
+                    opt_step(grads_in, opt_state)
+                )
 
         if do_profiling:
             print(f"Profiling completed. Data saved to {out_dir}")
@@ -1435,9 +1585,9 @@ def profile_kron(
 if __name__ == "__main__":
     profile_kron(
         out_dir="/tmp/kron_profile",
-        hidden_dim=2000,
-        num_layers=2,
-        block_size=1024,
+        hidden_dim=16,
+        num_layers=1,
+        block_size=16,
         do_profiling=True,
         # if manually setting precond sharding, set first dim to fsdp-like mesh axis
         # (i.e. it should be a common mesh axis in params and a large mesh axis)
