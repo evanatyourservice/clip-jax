@@ -19,9 +19,6 @@ from optax._src.utils import canonicalize_dtype
 from optax._src.combine import chain
 
 
-os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=16"
-
-
 # TODO testing cases, ndim=0, size=1/ndim=1, other sizes, all combos
 
 
@@ -107,7 +104,7 @@ def scale_by_kron(
         partition_grads_into_blocks: bool, whether to partition grads into chunks of
             size `block_size` for memory efficiency.
         block_size: int, size of partitions to use for memory efficiency.
-        buffer_qqconj: bool, whether to buffer qqconj for faster preconditioning.
+        buffer_qqconj: bool, whether to buffer qqconj.
         params_sharding: pytree same structure as params of PartitionSpec.
         preconditioner_sharding: partition spec for preconditioner matrices
             PartitionSpec(str | None, str | None).
@@ -557,16 +554,22 @@ def scale_by_kron(
                                     False,
                                     0,
                                     nm,
-                                    lambda q, pad_size=ps: _get_q(q, pad_size),
+                                    lambda q, pad_size=ps, sharding=(
+                                        sh if have_qs_sharding else None
+                                    ): _get_q(q, pad_size, sharding),
                                     q,
                                 )
                                 if not d
                                 else q
                             )
-                            for q, d, ps in zip(qs, dd, pad_size)
+                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding)
                         ]
-                        for qs, nm, dd, pad_size in zip(
-                            Qs, n_dims_to_map, dim_diag, pad_sizes
+                        for qs, nm, dd, pad_size, sharding in zip(
+                            Qs,
+                            n_dims_to_map,
+                            dim_diag,
+                            pad_sizes,
+                            Qs_sharding_no_leading_dims,
                         )
                     ]
                     if have_qs_sharding:
@@ -631,6 +634,8 @@ def scale_by_kron(
                         Qs_sharding_no_leading_dims,
                     )
                 ]
+                if have_qs_sharding:
+                    new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
 
                 if buffer_qqconj:
                     # store half of qqconj in lower triangular part of Qs (Q is triu)
@@ -641,16 +646,22 @@ def scale_by_kron(
                                     False,
                                     0,
                                     nm,
-                                    lambda q, pad_size=ps: _store_qqconj(q, pad_size),
+                                    lambda q, pad_size=ps, sharding=(
+                                        sh if have_qs_sharding else None
+                                    ): _store_qqconj(q, pad_size, sharding),
                                     q,
                                 )
                                 if not d
                                 else q
                             )
-                            for q, d, ps in zip(qs, dd, pad_size)
+                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding)
                         ]
-                        for qs, nm, dd, pad_size in zip(
-                            new_Qs, n_dims_to_map, dim_diag, pad_sizes
+                        for qs, nm, dd, pad_size, sharding in zip(
+                            new_Qs,
+                            n_dims_to_map,
+                            dim_diag,
+                            pad_sizes,
+                            Qs_sharding_no_leading_dims,
                         )
                     ]
                 return new_Qs
@@ -669,22 +680,48 @@ def scale_by_kron(
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
             # precondition with stale Qs
+            if buffer_qqconj:
+                Qs_in = [
+                    [
+                        (
+                            _map_fn(
+                                False,
+                                0,
+                                nm,
+                                lambda q, pad_size=ps, sharding=(
+                                    sh if have_qs_sharding else None
+                                ): _get_qqconj(q, pad_size, sharding),
+                                q,
+                            )
+                            if not d
+                            else q
+                        )
+                        for q, d, ps, sh in zip(qs, dd, pad_size, sharding)
+                    ]
+                    for qs, nm, dd, pad_size, sharding in zip(
+                        Qs,
+                        n_dims_to_map,
+                        dim_diag,
+                        pad_sizes,
+                        Qs_sharding_no_leading_dims,
+                    )
+                ]
+            else:
+                Qs_in = Qs
+            if have_qs_sharding:
+                Qs_in = _safe_sharding_constraint(Qs_in, Qs_sharding)
+
             precond_gs = [
                 _map_fn(
                     lax_map,
                     bs,
                     nm,
-                    partial(
-                        _precond_grad,
-                        exprs=expr,
-                        buffer_qqconj=buffer_qqconj,
-                        pad_sizes=pss,
-                    ),
+                    partial(_precond_grad, exprs=expr, buffer_qqconj=buffer_qqconj),
                     Q,
                     g,
                 )
-                for expr, g, Q, nm, pss in zip(
-                    expressions, momentum_updates, Qs, n_dims_to_map, pad_sizes
+                for expr, g, Q, nm in zip(
+                    expressions, momentum_updates, Qs_in, n_dims_to_map
                 )
             ]
             if have_params_sharding:
@@ -993,9 +1030,7 @@ def _init_Q_exprs(
                                     )
                                     axis_sizes.append(axis_size)
                             pad_size = max(axis_sizes)
-                        q = _store_qqconj(q, pad_size)
-                        if have_qs_sharding:
-                            q = _safe_sharding_constraint(q, q_sharding)
+                        q = _store_qqconj(q, pad_size, sharding=q_sharding)
 
                     Q.append(q)
 
@@ -1039,24 +1074,39 @@ def _init_Q_exprs(
     return Q, (exprA, exprGs, exprP), sharding_out
 
 
-def _store_qqconj(q, pad_size=1):
+def _store_qqconj(q, pad_size=1, sharding=None):
     # after storing qqconj, precond update goes from
     # an,bo,aA,bB,AB->no to cached:[aA,an->An, bB,bo->Bo], update:An,Bo,AB->no
-    qqconj = jnp.einsum("aA,an->An", q, q.conj())  # keep first dim as contracting
+    p = jnp.einsum("aA,an->An", q, q.conj())  # keep first dim as contracting
+    if sharding is not None:
+        p = _safe_sharding_constraint(p, sharding)
     q = jnp.pad(q, ((0, pad_size), (pad_size, 0)))
-    qqconj = jnp.pad(qqconj, ((pad_size, 0), (0, pad_size)))
-    return q.at[jnp.tril_indices_from(q)].set(qqconj[jnp.tril_indices_from(qqconj)])
+    if sharding is not None:
+        q = _safe_sharding_constraint(q, sharding)
+    p = jnp.pad(p, ((pad_size, 0), (0, pad_size)))
+    if sharding is not None:
+        p = _safe_sharding_constraint(p, sharding)
+    q += jnp.tril(p, k=-pad_size)
+    if sharding is not None:
+        q = _safe_sharding_constraint(q, sharding)
+    return q
 
 
-def _get_qqconj(q, pad_size=1):
-    qqconj = jnp.tril(q[pad_size:, :-pad_size])
-    return qqconj.at[jnp.triu_indices_from(qqconj)].set(
-        qqconj.T[jnp.triu_indices_from(qqconj)]
-    )
+def _get_qqconj(q, pad_size=1, sharding=None):
+    p = jnp.tril(q[pad_size:, :-pad_size])
+    if sharding is not None:
+        p = _safe_sharding_constraint(p, sharding)
+    p = p + p.T - jnp.diag(jnp.diag(p))
+    if sharding is not None:
+        p = _safe_sharding_constraint(p, sharding)
+    return p
 
 
-def _get_q(q, pad_size=1):
-    return jnp.triu(q[:-pad_size, pad_size:])
+def _get_q(q, pad_size=1, sharding=None):
+    q = jnp.triu(q[:-pad_size, pad_size:])
+    if sharding is not None:
+        q = _safe_sharding_constraint(q, sharding)
+    return q
 
 
 def _norm_lower_bound(A: jax.Array):
@@ -1065,38 +1115,22 @@ def _norm_lower_bound(A: jax.Array):
     Numerical results on random matrices with a wide range of distributions and
     sizes suggest, norm(A) <= sqrt(2) * norm_lower_bound(A). Looks to be a very
     tight lower bound.
+
+    A is hermitian so we can always use dim 0 and not have to compare to dim 1.
     """
     max_abs = jnp.max(jnp.abs(A))
 
     def calc(A):
         A = A / max_abs
         A_conj = A.conj()
-
         aa = jnp.real(A * A_conj)
-
         aa_sum0 = jnp.sum(aa, axis=0)
-        aa_sum1 = jnp.sum(aa, axis=1)
         i = jnp.argmax(aa_sum0, 0)
-        j = jnp.argmax(aa_sum1, 0)
-        value0 = jax.lax.dynamic_index_in_dim(aa_sum0, i, 0, keepdims=False)
-        value1 = jax.lax.dynamic_index_in_dim(aa_sum1, j, 0, keepdims=False)
+        x = jax.lax.dynamic_index_in_dim(A, i, 1, keepdims=False)
+        x = x.conj() @ A
+        return max_abs * jnp.linalg.norm((x / jnp.linalg.norm(x)) @ A_conj.T)
 
-        def gt_branch():
-            x = jax.lax.dynamic_index_in_dim(A, i, 1, keepdims=False)
-            x = x.conj() @ A
-            return max_abs * jnp.linalg.norm((x / jnp.linalg.norm(x)) @ A_conj.T)
-
-        def le_branch():
-            x = jax.lax.dynamic_index_in_dim(A, j, 0, keepdims=False)
-            x = A @ x.conj()
-            return max_abs * jnp.linalg.norm(A_conj.T @ (x / jnp.linalg.norm(x)))
-
-        return jax.lax.cond(value0 > value1, gt_branch, le_branch)
-
-    def no_calc(_):
-        return max_abs
-
-    return jax.lax.cond(max_abs > 0, calc, no_calc, A)
+    return jnp.where(max_abs > 0, calc(A), max_abs)
 
 
 def _solve_triangular_right(X, A):
@@ -1177,12 +1211,11 @@ def _update_precond(Q, G, conjB, exprs, precond_lr, qs_sharding):
     return [_update_single_q(i, q) for i, q in enumerate(Q)]
 
 
-def _precond_grad(Q, G, exprs, buffer_qqconj=False, pad_sizes=None):
+def _precond_grad(Q, G, exprs, buffer_qqconj=False):
     """Precondition gradient G with preconditioner Q."""
     exprP = exprs[-1]
     if buffer_qqconj:
-        qqconjs = [_get_qqconj(q, ps) for q, ps in zip(Q, pad_sizes)]
-        return jnp.einsum(exprP, *qqconjs, G)
+        return jnp.einsum(exprP, *Q, G)
     else:
         return jnp.einsum(exprP, *[q.conj() for q in Q], *Q, G)
 
@@ -1448,6 +1481,7 @@ def profile_kron(
     block_size: int = 512,
     do_profiling: bool = True,
     preconditioner_sharding: Optional[PartitionSpec] = PartitionSpec("data", "model"),
+    buffer_qqconj: bool = False,
 ):
     import os
     import time
@@ -1530,6 +1564,7 @@ def profile_kron(
         scanned_layers=scanned_layers,
         lax_map_scanned_layers=False,
         lax_map_batch_size=8,
+        buffer_qqconj=buffer_qqconj,
     )
 
     with mesh:
@@ -1583,13 +1618,27 @@ def profile_kron(
 
 
 if __name__ == "__main__":
+    import time
     profile_kron(
-        out_dir="/tmp/kron_profile",
-        hidden_dim=16,
-        num_layers=1,
-        block_size=16,
+        out_dir="gs://optimizertesting/kron_profile",
+        hidden_dim=2000,
+        num_layers=2,
+        block_size=1024,
         do_profiling=True,
         # if manually setting precond sharding, set first dim to fsdp-like mesh axis
         # (i.e. it should be a common mesh axis in params and a large mesh axis)
         preconditioner_sharding=PartitionSpec("data", "model"),
+        buffer_qqconj=True,
+    )
+    time.sleep(2)
+    profile_kron(
+        out_dir="gs://optimizertesting/kron_profile",
+        hidden_dim=2000,
+        num_layers=2,
+        block_size=1024,
+        do_profiling=True,
+        # if manually setting precond sharding, set first dim to fsdp-like mesh axis
+        # (i.e. it should be a common mesh axis in params and a large mesh axis)
+        preconditioner_sharding=PartitionSpec("data", "model"),
+        buffer_qqconj=False,
     )
