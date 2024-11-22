@@ -1,4 +1,3 @@
-import os
 from typing import Any, List, Optional, Union, Callable, Tuple
 from functools import partial
 import string
@@ -65,7 +64,7 @@ def scale_by_kron(
     target_merged_dim_size: int = 2048,
     partition_grads_into_blocks: bool = False,
     block_size: int = 512,
-    buffer_qqconj: bool = True,
+    buffer_qqconj: bool = False,
     params_sharding: Optional[Any] = None,
     preconditioner_sharding: Optional[PartitionSpec[str, str]] = None,
 ) -> base.GradientTransformationExtraArgs:
@@ -151,15 +150,14 @@ def scale_by_kron(
             params_sharding_ = jax.tree.map(lambda _: None, params)
         if have_params_sharding:
             # extend partition specs to all dims
-            params_sharding_ = jax.tree.map(
-                lambda p, sh: (
-                    PartitionSpec(*(sh + (None,) * (len(p.shape) - len(sh))))
-                    if sh is not None
-                    else None
-                ),
-                params,
-                params_sharding_,
-            )
+            def extend_sharding(p, sh):
+                if sh is None:
+                    return None
+                if len(sh) < len(p.shape):
+                    return PartitionSpec(*(sh + (None,) * (len(p.shape) - len(sh))))
+                return sh
+
+            params_sharding_ = jax.tree.map(extend_sharding, params, params_sharding_)
 
         # scanned layers
         scanned_layers_ = scanned_layers
@@ -562,7 +560,7 @@ def scale_by_kron(
                                 if not d
                                 else q
                             )
-                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding)
+                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding if have_qs_sharding else [None] * len(qs))
                         ]
                         for qs, nm, dd, pad_size, sharding in zip(
                             Qs,
@@ -625,11 +623,11 @@ def scale_by_kron(
                         g,
                         conjb,
                     )
-                    for expr, g, Q, conjb, nm, qss in zip(
-                        expressions,
-                        momentum_updates,
+                    for Q, g, conjb, expr, nm, qss in zip(
                         Qs,
+                        momentum_updates,
                         conjBs,
+                        expressions,
                         n_dims_to_map,
                         Qs_sharding_no_leading_dims,
                     )
@@ -654,7 +652,7 @@ def scale_by_kron(
                                 if not d
                                 else q
                             )
-                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding)
+                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding if have_qs_sharding else [None] * len(qs))
                         ]
                         for qs, nm, dd, pad_size, sharding in zip(
                             new_Qs,
@@ -696,7 +694,7 @@ def scale_by_kron(
                             if not d
                             else q
                         )
-                        for q, d, ps, sh in zip(qs, dd, pad_size, sharding)
+                        for q, d, ps, sh in zip(qs, dd, pad_size, sharding if have_qs_sharding else [None] * len(qs))
                     ]
                     for qs, nm, dd, pad_size, sharding in zip(
                         Qs,
@@ -809,8 +807,8 @@ def kron(
     merge_small_dims: bool = False,
     target_merged_dim_size: int = 2048,
     partition_grads_into_blocks: bool = False,
-    block_size: int = 512,
-    buffer_qqconj: bool = True,
+    block_size: int = 256,
+    buffer_qqconj: bool = False,
     params_sharding: Optional[Any] = None,
     preconditioner_sharding: Optional[PartitionSpec[str, str]] = None,
 ) -> base.GradientTransformationExtraArgs:
@@ -1173,7 +1171,16 @@ def _update_precond(Q, G, conjB, exprs, precond_lr, qs_sharding):
     """Compute A and update Q."""
     exprA, exprGs, _ = exprs
 
-    A = jnp.einsum(exprA, *Q, G)
+    print(f"Q: {Q}")
+
+    try:
+        A = jnp.einsum(exprA, *Q, G)
+    except ValueError as e:
+        print(f"Failed einsum inputs:")
+        print(f"Expression: {exprA}")
+        print(f"Number of operands: {len(Q) + 1}")  # +1 for G
+        print(f"Operand shapes: {[q.shape for q in Q]} and {G.shape}")
+        raise
 
     A_conj = A.conj()
     conjB_conj = conjB.conj()
@@ -1473,172 +1480,228 @@ def _unstack_matrices(stacked_arrays, revert_indices):
         return tuple(array_list)
     return array_list
 
+# ... existing code ...
 
-def profile_kron(
-    out_dir: str = "/tmp/kron_profile",
-    hidden_dim: int = 2000,
-    num_layers: int = 2,
-    block_size: int = 512,
-    do_profiling: bool = True,
-    preconditioner_sharding: Optional[PartitionSpec] = PartitionSpec("data", "model"),
-    buffer_qqconj: bool = False,
-):
-    import os
-    import time
-    from pprint import pprint
 
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-
-    devices = jax.devices()
-    print(f"devices: {devices}")
-    mesh_shape = (len(devices) // 2, 2)
-    device_mesh = np.array(devices).reshape(mesh_shape)
-    mesh = jax.sharding.Mesh(device_mesh, ("data", "model"))
-    print(f"mesh: {mesh}")
-
+def create_test_cases():
+    """Create test cases combining networks and optimizer settings."""
     rng = jax.random.PRNGKey(0)
-
-    def create_fake_params():
-        params = []
-        for _ in range(num_layers):
-            layer_params = {
-                "attention": {
-                    "qkv": jax.random.normal(rng, (2, hidden_dim, 2 * hidden_dim)),
-                    "output": jax.random.normal(rng, (2, 2 * hidden_dim, hidden_dim)),
-                },
-                "mlp": {
-                    "fc1": jax.random.normal(rng, (2, hidden_dim, 2 * hidden_dim)),
-                    "fc2": jax.random.normal(rng, (2, 2 * hidden_dim, hidden_dim)),
-                },
-            }
-            params.append(layer_params)
-        return params
-
-    def create_sharding_spec():
-        layer_spec = {
-            "attention": {
-                "qkv": PartitionSpec(None, "data", "model"),
-                "output": PartitionSpec(None, "model", "data"),
+    
+    test_cases = {
+        "scalar": {
+            "params": {
+                "value": jax.random.normal(rng, ()),
             },
-            "mlp": {
-                "fc1": PartitionSpec(None, "data", "model"),
-                "fc2": PartitionSpec(None, "model", "data"),
+            "scanned_layers": {
+                "value": False,
             },
-        }
-        return [layer_spec for _ in range(num_layers)]
+            "settings": [
+                {"memory_save_mode": None, "b1": 0.0},
+                {"memory_save_mode": "all_diag", "b1": 0.9},
+            ]
+        },
+        
+        "vector_size_1": {
+            "params": {
+                "weights": jax.random.normal(rng, (1,)),
+                "bias": jax.random.normal(rng, ()),
+            },
+            "scanned_layers": {
+                "weights": False,
+                "bias": False,
+            },
+            "settings": [
+                {"memory_save_mode": None, "merge_small_dims": True},
+                {"memory_save_mode": "one_diag", "merge_small_dims": False},
+            ]
+        },
+        
+        "tiny_linear": {
+            "params": {
+                "weights": jax.random.normal(rng, (4, 3)),
+                "bias": jax.random.normal(rng, (3,)),
+            },
+            "scanned_layers": {
+                "weights": False,
+                "bias": False,
+            },
+            "settings": [
+                {
+                    "memory_save_mode": None,
+                    "partition_grads_into_blocks": True,
+                    "block_size": 2,
+                },
+                {
+                    "memory_save_mode": "one_diag",
+                    "partition_grads_into_blocks": False,
+                },
+            ]
+        },
+        
+        "multi_dim": {
+            "params": {
+                "tensor3d": jax.random.normal(rng, (2, 2, 2)),
+                "tensor4d": jax.random.normal(rng, (2, 2, 2, 2)),
+            },
+            "scanned_layers": {
+                "tensor3d": False,
+                "tensor4d": False,
+            },
+            "settings": [
+                {
+                    "memory_save_mode": None,
+                    "merge_small_dims": True,
+                    "target_merged_dim_size": 4,
+                },
+                {
+                    "memory_save_mode": "all_diag",
+                    "merge_small_dims": False,
+                },
+            ]
+        },
+        
+        "scanned_layer": {
+            "params": {
+                "weights": jax.random.normal(rng, (4, 3, 2)),
+                "bias": jax.random.normal(rng, (4, 2)),
+            },
+            "scanned_layers": {
+                "weights": True,
+                "bias": True,
+            },
+            "settings": [
+                {
+                    "memory_save_mode": None,
+                    "buffer_qqconj": True,
+                },
+                {
+                    "memory_save_mode": "one_diag",
+                    "buffer_qqconj": False,
+                },
+            ]
+        },
+        
+        "mixed_shapes": {
+            "params": {
+                "scalar": jax.random.normal(rng, ()),
+                "vector": jax.random.normal(rng, (3,)),
+                "matrix": jax.random.normal(rng, (2, 2)),
+            },
+            "scanned_layers": {
+                "scalar": False,
+                "vector": False,
+                "matrix": False,
+            },
+            "settings": [
+                {"memory_save_mode": None, "normalize_grads": True},
+                {"memory_save_mode": "all_diag", "normalize_grads": False},
+            ]
+        },
+    }
+    
+    # Default settings to merge with specific test settings
+    default_settings = {
+        "b1": 0.9,
+        "normalize_grads": False,
+        "preconditioner_update_probability": 1.0,
+        "max_size_triangular": 8192,
+        "min_ndim_triangular": 2,
+        "mu_dtype": None,
+        "precond_dtype": None,
+        "precond_update_precision": "float32",
+        "precond_grads_precision": None,
+        "merge_small_dims": False,
+        "target_merged_dim_size": 4,
+        "partition_grads_into_blocks": False,
+        "block_size": 2,
+        "buffer_qqconj": True,
+    }
+    
+    # Merge default settings with specific test settings
+    for case in test_cases.values():
+        case["settings"] = [
+            {**default_settings, **specific_settings}
+            for specific_settings in case["settings"]
+        ]
+    
+    return test_cases
 
-    def create_scanned_spec():
-        layer_spec = {
-            "attention": {"qkv": True, "output": True},
-            "mlp": {"fc1": True, "fc2": True},
-        }
-        return [layer_spec for _ in range(num_layers)]
-
-    params = create_fake_params()
-    print(f"params:")
-    pprint(jax.tree.map(lambda x: x.shape, params), width=120)
-
-    params_sharding = create_sharding_spec()
-    print(f"params_sharding:")
-    pprint(params_sharding, width=120)
-
-    scanned_layers = create_scanned_spec()
-    print(f"scanned_layers:")
-    pprint(scanned_layers, width=120)
-
-    grads_sharding = params_sharding
-
-    optimizer = kron(
-        learning_rate=0.001,
-        b1=0.9,
-        normalize_grads=False,
-        preconditioner_update_probability=1.0,
-        memory_save_mode=None,
-        merge_small_dims=True,
-        target_merged_dim_size=2048,
-        partition_grads_into_blocks=True,
-        block_size=block_size,
-        params_sharding=params_sharding,
-        preconditioner_sharding=preconditioner_sharding,
-        scanned_layers=scanned_layers,
-        lax_map_scanned_layers=False,
-        lax_map_batch_size=8,
-        buffer_qqconj=buffer_qqconj,
-    )
-
-    with mesh:
+def test_kron(params, scanned_layers, settings, test_name):
+    """Run a single test configuration of the Kron optimizer."""
+    print(f"\nRunning test: {test_name}")
+    print("Network shapes:", jax.tree.map(lambda x: x.shape, params))
+    print("Settings:", settings)
+    
+    try:
+        # Create optimizer
+        optimizer = kron(learning_rate=0.001, **settings)
+        
+        # Initialize optimizer
         opt_state = optimizer.init(params)
-        print(f"opt_state:")
-        pprint(jax.tree.map(lambda x: x.shape, opt_state), width=120)
-
-        opt_state_sharding = jax.tree.map(lambda x: x.sharding, opt_state)
-        print(f"opt_state_sharding:")
-        pprint(opt_state_sharding, width=120)
-
-        @partial(jax.jit, donate_argnums=0)
-        def opt_step(grads, opt_state):
-            return optimizer.update(grads, opt_state, params)
-
+        
+        # Define update step
         @jax.jit
-        def fake_grads():
-            grads = jax.tree.map(
-                lambda x: jax.random.normal(rng, x.shape, x.dtype), params
+        def opt_step(grads, state):
+            return optimizer.update(grads, state, params)
+
+        # Create fake gradients
+        rng = jax.random.PRNGKey(0)
+        grads = jax.tree.map(
+            lambda x: jax.random.normal(rng, x.shape, x.dtype), 
+            params
+        )
+
+        # Run optimization steps
+        for step in range(3):
+            updates, opt_state = jax.block_until_ready(opt_step(grads, opt_state))
+            
+        print("✓ Test passed successfully")
+        return True
+
+    except Exception as e:
+        import traceback
+        print(f"\n✗ Test failed with error:")
+        print("=" * 80)
+        traceback.print_exc()
+        print("=" * 80)
+        return False
+
+def run_test_suite():
+    """Run test suite with all network and optimizer combinations."""
+    print("Starting Kron Optimizer Test Suite")
+    print(f"JAX devices: {jax.devices()}")
+    
+    test_cases = create_test_cases()
+    results = []
+    
+    for net_name, case in test_cases.items():
+        for i, settings in enumerate(case["settings"]):
+            test_name = f"{net_name}_config_{i}"
+            success = test_kron(
+                case["params"],
+                case["scanned_layers"],
+                settings,
+                test_name
             )
-            return with_sharding_constraint(grads, grads_sharding)
-
-        start_time = time.time()
-        updates, opt_state = jax.block_until_ready(opt_step(fake_grads(), opt_state))
-        end_time = time.time()
-        print(f"Compile time: {end_time - start_time} seconds")
-
-        for step in range(15):
-            print(f"step {step}")
-
-            if do_profiling:
-                if step == 5:
-                    jax.profiler.start_trace(out_dir)
-                if step == 10:
-                    jax.profiler.stop_trace()
-
-            grads_in = jax.block_until_ready(fake_grads())
-
-            with jax.profiler.StepTraceAnnotation("optimizer_step", step_num=step):
-                updates, opt_state = jax.block_until_ready(
-                    opt_step(grads_in, opt_state)
-                )
-
-        if do_profiling:
-            print(f"Profiling completed. Data saved to {out_dir}")
-
-        print("final updates sharding:")
-        pprint(jax.tree.map(lambda x: x.sharding, updates), width=120)
-        print("final opt_state sharding:")
-        pprint(opt_state_sharding, width=120)
-
+            results.append((test_name, success))
+    
+    # Print summary
+    print("\nTest Summary")
+    print("=" * 80)
+    passed = sum(1 for _, success in results if success)
+    total = len(results)
+    print(f"Passed {passed}/{total} tests ({passed/total*100:.1f}%)")
+    
+    if passed < total:
+        print("\nFailed Tests:")
+        for name, success in results:
+            if not success:
+                print(f"✗ {name}")
+                
+    return passed == total
 
 if __name__ == "__main__":
-    import time
-    profile_kron(
-        out_dir="gs://optimizertesting/kron_profile",
-        hidden_dim=2000,
-        num_layers=2,
-        block_size=1024,
-        do_profiling=True,
-        # if manually setting precond sharding, set first dim to fsdp-like mesh axis
-        # (i.e. it should be a common mesh axis in params and a large mesh axis)
-        preconditioner_sharding=PartitionSpec("data", "model"),
-        buffer_qqconj=True,
-    )
-    time.sleep(2)
-    profile_kron(
-        out_dir="gs://optimizertesting/kron_profile",
-        hidden_dim=2000,
-        num_layers=2,
-        block_size=1024,
-        do_profiling=True,
-        # if manually setting precond sharding, set first dim to fsdp-like mesh axis
-        # (i.e. it should be a common mesh axis in params and a large mesh axis)
-        preconditioner_sharding=PartitionSpec("data", "model"),
-        buffer_qqconj=False,
-    )
+    import sys
+    success = run_test_suite()
+    print("✅" if success else "❌")
+    sys.exit(0 if success else 1)
