@@ -533,10 +533,7 @@ def scale_by_kron(
 
         # pad sizes for buffering qqconj
         pad_sizes = [
-            [
-                q.shape[nm] - dim
-                for q, dim in zip(qs, p.shape[nm:])
-            ]
+            [q.shape[nm] - dim for q, dim in zip(qs, p.shape[nm:])]
             for qs, p, nm in zip(Qs, momentum_updates, n_dims_to_map)
         ]
 
@@ -560,7 +557,12 @@ def scale_by_kron(
                                 if not d
                                 else q
                             )
-                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding if have_qs_sharding else [None] * len(qs))
+                            for q, d, ps, sh in zip(
+                                qs,
+                                dd,
+                                pad_size,
+                                sharding if have_qs_sharding else [None] * len(qs),
+                            )
                         ]
                         for qs, nm, dd, pad_size, sharding in zip(
                             Qs,
@@ -652,7 +654,12 @@ def scale_by_kron(
                                 if not d
                                 else q
                             )
-                            for q, d, ps, sh in zip(qs, dd, pad_size, sharding if have_qs_sharding else [None] * len(qs))
+                            for q, d, ps, sh in zip(
+                                qs,
+                                dd,
+                                pad_size,
+                                sharding if have_qs_sharding else [None] * len(qs),
+                            )
                         ]
                         for qs, nm, dd, pad_size, sharding in zip(
                             new_Qs,
@@ -694,7 +701,12 @@ def scale_by_kron(
                             if not d
                             else q
                         )
-                        for q, d, ps, sh in zip(qs, dd, pad_size, sharding if have_qs_sharding else [None] * len(qs))
+                        for q, d, ps, sh in zip(
+                            qs,
+                            dd,
+                            pad_size,
+                            sharding if have_qs_sharding else [None] * len(qs),
+                        )
                     ]
                     for qs, nm, dd, pad_size, sharding in zip(
                         Qs,
@@ -893,7 +905,7 @@ def _get_preconditioner_types(
     shape: Tuple[int, ...], max_size: int, min_ndim: int, mem_save_mode: Optional[str]
 ) -> List[bool]:
     if len(shape) == 0:
-        return [True]
+        return True
 
     if mem_save_mode is None:
         dim_diag = [False for _ in shape]
@@ -1063,7 +1075,13 @@ def _init_Q_exprs(
             exprP = ",".join(piece1P) + "," + piece3P + "->" + piece4P
         else:
             exprP = (
-                ",".join(piece1P) + "," + ",".join(piece2P) + "," + piece3P + "->" + piece4P
+                ",".join(piece1P)
+                + ","
+                + ",".join(piece2P)
+                + ","
+                + piece3P
+                + "->"
+                + piece4P
             )
 
     exprGs = tuple(exprGs)
@@ -1358,8 +1376,14 @@ def _merge_small_dims(
     Returns:
         Tuple of (merged shape, merged diag flags, merged sharding).
     """
-    if not shape_to_merge or np.all(np.array(shape_to_merge) == 1):
-        return [1], [True], None
+    if not shape_to_merge:  # handles scalar shape ()
+        return [], [True], PartitionSpec() if sharding_to_merge is not None else None
+    if np.all(np.array(shape_to_merge) == 1):  # handles shape (1,)
+        return (
+            [1],
+            [True],
+            (PartitionSpec(None) if sharding_to_merge is not None else None),
+        )
 
     def dim2loss(d, dim0=max_dim):
         """A heuristic map from dim to loss with the least loss occurs at dim0."""
@@ -1419,23 +1443,40 @@ def _merge_small_dims(
 
 
 def _pad_and_stack_matrices(array_list, block_size):
+    # Handle scalar arrays by adding a dummy dimension
+    is_scalar = len(array_list[0].shape) == 0
+    if is_scalar:
+        array_list = [arr[None] for arr in array_list]
+    
     shapes = [arr.shape for arr in array_list]
     max_dims = [max(shape[i] for shape in shapes) for i in range(len(shapes[0]))]
     padded_shape = [-(-dim // block_size) * block_size for dim in max_dims]
     padded_arrays = []
     for arr in array_list:
         pad_width = [(0, padded_shape[i] - arr.shape[i]) for i in range(arr.ndim)]
-        padded = jnp.pad(arr, pad_width, mode="constant", constant_values=0)
+        padded = jnp.pad(arr, pad_width)
         padded_arrays.append(padded)
-    return jnp.stack(padded_arrays)
+    
+    stacked = jnp.stack(padded_arrays)
+    return stacked
 
 
 def _unstack_and_unpad_matrices(stacked_array, original_shapes):
+    # Handle scalar arrays
+    is_scalar = len(original_shapes[0]) == 0
+    
     unstacked = jnp.split(stacked_array, stacked_array.shape[0], axis=0)
     unpadded = []
     for arr, orig_shape in zip(unstacked, original_shapes):
-        slices = tuple(slice(0, dim) for dim in orig_shape)
-        unpadded.append(jnp.squeeze(arr, axis=0)[slices])
+        arr = jnp.squeeze(arr, axis=0)
+        if is_scalar:
+            # For scalars, just take the first element
+            arr = arr[0]
+        else:
+            # For non-scalars, slice to original shape
+            slices = tuple(slice(0, dim) for dim in orig_shape)
+            arr = arr[slices]
+        unpadded.append(arr)
     return tuple(unpadded)
 
 
@@ -1480,126 +1521,85 @@ def _unstack_matrices(stacked_arrays, revert_indices):
         return tuple(array_list)
     return array_list
 
-# ... existing code ...
-
-
 def create_test_cases():
     """Create test cases combining networks and optimizer settings."""
     rng = jax.random.PRNGKey(0)
-    
+
     test_cases = {
         "scalar": {
-            "params": {
-                "value": jax.random.normal(rng, ()),
-            },
-            "scanned_layers": {
-                "value": False,
-            },
+            "params": {"value": jax.random.normal(rng, ())},
+            "scanned_layers": {"value": False},
             "settings": [
                 {"memory_save_mode": None, "b1": 0.0},
                 {"memory_save_mode": "all_diag", "b1": 0.9},
-            ]
+            ],
         },
-        
         "vector_size_1": {
             "params": {
                 "weights": jax.random.normal(rng, (1,)),
                 "bias": jax.random.normal(rng, ()),
             },
-            "scanned_layers": {
-                "weights": False,
-                "bias": False,
-            },
+            "scanned_layers": {"weights": False, "bias": False},
             "settings": [
                 {"memory_save_mode": None, "merge_small_dims": True},
                 {"memory_save_mode": "one_diag", "merge_small_dims": False},
-            ]
+            ],
         },
-        
         "tiny_linear": {
             "params": {
                 "weights": jax.random.normal(rng, (4, 3)),
                 "bias": jax.random.normal(rng, (3,)),
             },
-            "scanned_layers": {
-                "weights": False,
-                "bias": False,
-            },
+            "scanned_layers": {"weights": False, "bias": False},
             "settings": [
                 {
                     "memory_save_mode": None,
                     "partition_grads_into_blocks": True,
                     "block_size": 2,
                 },
-                {
-                    "memory_save_mode": "one_diag",
-                    "partition_grads_into_blocks": False,
-                },
-            ]
+                {"memory_save_mode": "one_diag", "partition_grads_into_blocks": False},
+            ],
         },
-        
         "multi_dim": {
             "params": {
                 "tensor3d": jax.random.normal(rng, (2, 2, 2)),
                 "tensor4d": jax.random.normal(rng, (2, 2, 2, 2)),
             },
-            "scanned_layers": {
-                "tensor3d": False,
-                "tensor4d": False,
-            },
+            "scanned_layers": {"tensor3d": False, "tensor4d": False},
             "settings": [
                 {
                     "memory_save_mode": None,
                     "merge_small_dims": True,
                     "target_merged_dim_size": 4,
                 },
-                {
-                    "memory_save_mode": "all_diag",
-                    "merge_small_dims": False,
-                },
-            ]
+                {"memory_save_mode": "all_diag", "merge_small_dims": False},
+            ],
         },
-        
         "scanned_layer": {
             "params": {
                 "weights": jax.random.normal(rng, (4, 3, 2)),
                 "bias": jax.random.normal(rng, (4, 2)),
             },
-            "scanned_layers": {
-                "weights": True,
-                "bias": True,
-            },
+            "scanned_layers": {"weights": True, "bias": True},
             "settings": [
-                {
-                    "memory_save_mode": None,
-                    "buffer_qqconj": True,
-                },
-                {
-                    "memory_save_mode": "one_diag",
-                    "buffer_qqconj": False,
-                },
-            ]
+                {"memory_save_mode": None, "buffer_qqconj": True},
+                {"memory_save_mode": "one_diag", "buffer_qqconj": False},
+            ],
         },
-        
         "mixed_shapes": {
             "params": {
                 "scalar": jax.random.normal(rng, ()),
                 "vector": jax.random.normal(rng, (3,)),
                 "matrix": jax.random.normal(rng, (2, 2)),
             },
-            "scanned_layers": {
-                "scalar": False,
-                "vector": False,
-                "matrix": False,
-            },
+            "scanned_layers": {"scalar": False, "vector": False, "matrix": False},
             "settings": [
                 {"memory_save_mode": None, "normalize_grads": True},
                 {"memory_save_mode": "all_diag", "normalize_grads": False},
-            ]
+            ],
         },
     }
-    
-    # Default settings to merge with specific test settings
+
     default_settings = {
         "b1": 0.9,
         "normalize_grads": False,
@@ -1616,92 +1616,81 @@ def create_test_cases():
         "block_size": 2,
         "buffer_qqconj": True,
     }
-    
-    # Merge default settings with specific test settings
+
     for case in test_cases.values():
         case["settings"] = [
             {**default_settings, **specific_settings}
             for specific_settings in case["settings"]
         ]
-    
+
     return test_cases
+
 
 def test_kron(params, scanned_layers, settings, test_name):
     """Run a single test configuration of the Kron optimizer."""
     print(f"\nRunning test: {test_name}")
     print("Network shapes:", jax.tree.map(lambda x: x.shape, params))
     print("Settings:", settings)
-    
+
     try:
-        # Create optimizer
         optimizer = kron(learning_rate=0.001, **settings)
-        
-        # Initialize optimizer
+
         opt_state = optimizer.init(params)
-        
-        # Define update step
+
         @jax.jit
         def opt_step(grads, state):
             return optimizer.update(grads, state, params)
 
-        # Create fake gradients
         rng = jax.random.PRNGKey(0)
-        grads = jax.tree.map(
-            lambda x: jax.random.normal(rng, x.shape, x.dtype), 
-            params
-        )
+        grads = jax.tree.map(lambda x: jax.random.normal(rng, x.shape, x.dtype), params)
 
-        # Run optimization steps
         for step in range(3):
             updates, opt_state = jax.block_until_ready(opt_step(grads, opt_state))
-            
+
         print("✓ Test passed successfully")
         return True
 
     except Exception as e:
         import traceback
+
         print(f"\n✗ Test failed with error:")
         print("=" * 80)
         traceback.print_exc()
         print("=" * 80)
         return False
 
+
 def run_test_suite():
     """Run test suite with all network and optimizer combinations."""
     print("Starting Kron Optimizer Test Suite")
     print(f"JAX devices: {jax.devices()}")
-    
+
     test_cases = create_test_cases()
     results = []
-    
+
     for net_name, case in test_cases.items():
         for i, settings in enumerate(case["settings"]):
             test_name = f"{net_name}_config_{i}"
             success = test_kron(
-                case["params"],
-                case["scanned_layers"],
-                settings,
-                test_name
+                case["params"], case["scanned_layers"], settings, test_name
             )
             results.append((test_name, success))
-    
-    # Print summary
+
     print("\nTest Summary")
     print("=" * 80)
     passed = sum(1 for _, success in results if success)
     total = len(results)
     print(f"Passed {passed}/{total} tests ({passed/total*100:.1f}%)")
-    
+
     if passed < total:
         print("\nFailed Tests:")
         for name, success in results:
             if not success:
                 print(f"✗ {name}")
-                
+
     return passed == total
 
+
 if __name__ == "__main__":
-    import sys
     success = run_test_suite()
     print("✅" if success else "❌")
-    sys.exit(0 if success else 1)
