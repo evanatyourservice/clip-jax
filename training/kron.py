@@ -855,7 +855,10 @@ def scale_by_kron(
         # box preconditioned grads
         if flax_partitioned:
             precond_gs = jax.tree.map(
-                lambda g, bu: bu.replace_boxed(g), precond_gs, boxed_updates
+                lambda bu, g: bu.replace_boxed(g),
+                boxed_updates,
+                precond_gs,
+                is_leaf=lambda x: isinstance(x, nn.Partitioned),
             )
 
         # unflatten pytrees and return scalars to original shape
