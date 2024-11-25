@@ -348,23 +348,17 @@ def scale_by_kron(
         have_qs_sharding = have_params_sharding or preconditioner_sharding is not None
 
         # unbox if flax style partitioned
+        boxed_updates, grads_structure = jax.tree.flatten(
+            updates,
+            is_leaf=lambda g: isinstance(
+                g, (chex.Array, nn.Partitioned, jax.ShapeDtypeStruct)
+            ),
+        )
         flax_partitioned = False
-        boxed_updates = updates
-        if isinstance(
-            jax.tree.leaves(
-                updates,
-                is_leaf=lambda x: isinstance(
-                    x, (chex.Array, nn.Partitioned, jax.ShapeDtypeStruct)
-                ),
-            )[0],
-            nn.Partitioned,
-        ):
+        if isinstance(boxed_updates[0], nn.Partitioned):
             flax_partitioned = True
-            updates = jax.tree.map(
-                lambda g: g.unbox(),
-                updates,
-                is_leaf=lambda x: isinstance(x, nn.Partitioned),
-            )
+            updates = [g.unbox() for g in boxed_updates]
+            updates = grads_structure.unflatten(updates)
 
         # extend partition specs
         params_sharding_ = params_sharding
@@ -854,14 +848,13 @@ def scale_by_kron(
 
         # box preconditioned grads
         if flax_partitioned:
-            precond_gs = jax.tree.map(
-                lambda bu, g: bu.replace_boxed(g),
-                boxed_updates,
-                precond_gs,
-                is_leaf=lambda x: isinstance(x, nn.Partitioned),
-            )
+            flat_precond_gs, _ = jax.tree.flatten(precond_gs)
+            precond_gs = [
+                bu.replace_boxed(g) for bu, g in zip(boxed_updates, flat_precond_gs)
+            ]
+            precond_gs = grads_structure.unflatten(precond_gs)
 
-        # unflatten pytrees and return scalars to original shape
+        # return scalars to original shape
         precond_gs = jax.tree.map(
             lambda g, s: jnp.reshape(g, s), precond_gs, input_shapes
         )
