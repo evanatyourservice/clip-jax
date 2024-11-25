@@ -348,17 +348,23 @@ def scale_by_kron(
         have_qs_sharding = have_params_sharding or preconditioner_sharding is not None
 
         # unbox if flax style partitioned
-        boxed_updates, grads_structure = jax.tree.flatten(
-            updates,
-            is_leaf=lambda g: isinstance(
-                g, (chex.Array, nn.Partitioned, jax.ShapeDtypeStruct)
-            ),
-        )
         flax_partitioned = False
-        if isinstance(boxed_updates[0], nn.Partitioned):
+        boxed_updates = updates
+        if isinstance(
+            jax.tree.leaves(
+                updates,
+                is_leaf=lambda x: isinstance(
+                    x, (chex.Array, nn.Partitioned, jax.ShapeDtypeStruct)
+                ),
+            )[0],
+            nn.Partitioned,
+        ):
             flax_partitioned = True
-            updates = [g.unbox() for g in boxed_updates]
-            updates = grads_structure.unflatten(updates)
+            updates = jax.tree.map(
+                lambda g: g.unbox(),
+                updates,
+                is_leaf=lambda x: isinstance(x, nn.Partitioned),
+            )
 
         # extend partition specs
         params_sharding_ = params_sharding
