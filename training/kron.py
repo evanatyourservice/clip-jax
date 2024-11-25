@@ -846,6 +846,11 @@ def scale_by_kron(
             if have_params_sharding:
                 precond_gs = _safe_sharding_constraint(precond_gs, params_sharding_)
 
+        # return scalars to original shape
+        precond_gs = jax.tree.map(
+            lambda g, s: jnp.reshape(g, s), precond_gs, input_shapes
+        )
+
         # box preconditioned grads
         if flax_partitioned:
             flat_precond_gs, _ = jax.tree.flatten(precond_gs)
@@ -853,11 +858,6 @@ def scale_by_kron(
                 bu.replace_boxed(g) for bu, g in zip(boxed_updates, flat_precond_gs)
             ]
             precond_gs = grads_structure.unflatten(precond_gs)
-
-        # return scalars to original shape
-        precond_gs = jax.tree.map(
-            lambda g, s: jnp.reshape(g, s), precond_gs, input_shapes
-        )
 
         # dtypes and new state
         mu = otu.tree_cast(mu, mu_dtype)
