@@ -1174,10 +1174,12 @@ def main():
                     trainable_params(params, training_args)
                 ),
                 merge_small_dims=training_args.kron_merge_small_dims,
+                target_merged_dim_size=4096,
                 partition_grads_into_blocks=True,
                 block_size=256,
+                buffer_qqconj=False,
                 params_sharding=params_spec,
-                preconditioner_sharding=PartitionSpec('model', 'data'),
+                preconditioner_sharding=PartitionSpec(None, None),
             ),
         ]
         if training_args.weight_decay > 0.0:
