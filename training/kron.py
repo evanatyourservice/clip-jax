@@ -1,7 +1,7 @@
 from typing import Any, List, Optional, Union, Callable, Tuple
+from collections import defaultdict
 from functools import partial
 import string
-from collections import defaultdict
 import numpy as np
 
 import chex
@@ -64,6 +64,7 @@ def scale_by_kron(
     buffer_qq: bool = False,
     params_sharding: Optional[Any] = None,
     preconditioner_sharding: Optional[PartitionSpec[str, str]] = None,
+    **kwargs,
 ) -> base.GradientTransformationExtraArgs:
     """
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
@@ -115,7 +116,7 @@ def scale_by_kron(
     lax_map = lax_map_scanned_layers
     bs = lax_map_batch_size
 
-    def init_fn(params):
+    def init_fn(params, return_partition_specs_only=False):
         current_mesh = mesh_lib.thread_resources.env.physical_mesh
         if (
             current_mesh.empty
@@ -185,23 +186,23 @@ def scale_by_kron(
 
         # momentum
         mu = None
-        if b1 > 0:
+        mu_sharding = params_sharding_
+        if b1 > 0 and not return_partition_specs_only:
             mu = jax.tree.map(lambda x: jnp.zeros_like(x, dtype=mu_dtype), params)
             # apply params sharding to momentum buffer
             if have_params_sharding:
                 mu = _safe_sharding_constraint(mu, params_sharding_)
 
-        # chop off scanned dims to make things easier
-        params_without_scan = jax.tree.map(
-            lambda p, s: _first_n_dims(p, int(s)), params, scanned_layers_
-        )
-
         # which preconditioners will be diagonal
         dim_diag = jax.tree.map(
-            lambda p: _get_preconditioner_types(
-                p.shape, max_size_triangular, min_ndim_triangular, memory_save_mode
+            lambda p, s: _get_preconditioner_types(
+                p.shape[int(s) :],
+                max_size_triangular,
+                min_ndim_triangular,
+                memory_save_mode,
             ),
-            params_without_scan,
+            params,
+            scanned_layers_,
         )
 
         # split sharding specs
@@ -214,68 +215,72 @@ def scale_by_kron(
                 scanned_layers_,
             )
             sharding_without_scan = jax.tree.map(
-                lambda sh, s: PartitionSpec(*(sh[1:] if s else sh)),
+                lambda sh, s: PartitionSpec(*(sh[int(s) :])),
                 params_sharding_,
                 scanned_layers_,
             )
 
         # merge small dimensions
         nones = jax.tree.map(lambda _: None, params)
+        merged_shapes = jax.tree.map(
+            lambda p, s: p.shape[int(s) :], params, scanned_layers_
+        )
         if merge_small_dims:
             output = jax.tree.map(
-                lambda p, dd, sh: _merge_small_dims(
-                    p.shape, target_merged_dim_size, dd, sh
+                lambda p, s, dd, sh: _merge_small_dims(
+                    p.shape[int(s) :], target_merged_dim_size, dd, sh
                 ),
-                params_without_scan,
+                params,
+                scanned_layers_,
                 dim_diag,
                 sharding_without_scan if have_params_sharding else nones,
             )
             merged_shapes, dim_diag, sharding_without_scan = [
                 jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)
             ]
-            params_without_scan = jax.tree.map(
-                lambda p, ns: jnp.reshape(p, ns), params_without_scan, merged_shapes
-            )
 
         # partition grads into blocks
+        partitioned_shapes = merged_shapes
         if partition_grads_into_blocks:
             partitioners = jax.tree.map(
-                lambda p, dd: BlockPartitioner(p.shape, block_size, dd),
-                params_without_scan,
+                lambda _, ps, dd: BlockPartitioner(ps, block_size, dd),
+                params,
+                merged_shapes,
                 dim_diag,
             )
-            # layers become tuples each containing layer's partitions
-            params_without_scan = jax.tree.map(
-                lambda p, p_cls: p_cls.partition(p), params_without_scan, partitioners
-            )
-            # pad and stack partitions, tuples become arrays with new leading dim
-            params_without_scan = jax.tree.map(
-                lambda _, p: _pad_and_stack_matrices(p, block_size),
-                params,
-                params_without_scan,
+            # we can grab resulting shapes from partitioners
+            partitioned_shapes = jax.tree.map(
+                lambda _, p_cls: p_cls._padded_stacked_shape, params, partitioners
             )
 
         # initialize preconditioners
         output = jax.tree.map(
-            lambda p, dd, sh: list(
+            lambda _, ps, dd, sh: list(
                 _init_Q_exprs(
-                    _first_n_dims(p, int(partition_grads_into_blocks)),
+                    ps[1:] if partition_grads_into_blocks else ps,
                     preconditioner_init_scale,
                     dd,
                     precond_dtype,
+                    existing_Q=True if return_partition_specs_only else None,
                     precond_sharding=preconditioner_sharding_,
                     param_sharding=sh,
                     buffer_qq=buffer_qq,
                     current_mesh=current_mesh,
                 )
             ),
-            params_without_scan,
+            params,
+            partitioned_shapes,
             dim_diag,
             sharding_without_scan if have_params_sharding else nones,
         )
-        Qs, exprs, Qs_sharding_no_leading_dims = [
-            jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)
-        ]
+        if return_partition_specs_only:
+            exprs, Qs_sharding_no_leading_dims = [
+                jax.tree.map(lambda _, x: x[i], params, output) for i in range(2)
+            ]
+        else:
+            Qs, exprs, Qs_sharding_no_leading_dims = [
+                jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)
+            ]
         Qs_sharding = None
         if have_qs_sharding:
             # add scan and stack dims to Qs sharding
@@ -293,45 +298,56 @@ def scale_by_kron(
                 scanned_dim_sharding,
             )
 
-        # broadcast Qs for stacks and scans
-        def broadcast_qs(p, q, s):
-            if partition_grads_into_blocks:
-                # add leading dim for stacked partitions
-                q = jax.tree.map(
-                    lambda x: jnp.repeat(jnp.expand_dims(x, 0), p.shape[0], axis=0), q
-                )
-            if s > 0:
-                # add leading dim if we're scanning this layer
-                q = jax.tree.map(
-                    lambda d: jnp.repeat(jnp.expand_dims(d, 0), s, axis=0), q
-                )
-            return q
+        if not return_partition_specs_only:
+            # broadcast Qs for stacks and scans
+            def broadcast_qs(_, ps, q, s):
+                stack_n = ps[0]
+                if partition_grads_into_blocks:
+                    # add leading dim for stacked partitions
+                    q = jax.tree.map(
+                        lambda x: jnp.repeat(jnp.expand_dims(x, 0), stack_n, axis=0), q
+                    )
+                if s > 0:
+                    # add leading dim if we're scanning this layer
+                    q = jax.tree.map(
+                        lambda d: jnp.repeat(jnp.expand_dims(d, 0), s, axis=0), q
+                    )
+                return q
 
-        Qs = jax.tree.map(broadcast_qs, params_without_scan, Qs, scanned_sizes)
-        if have_qs_sharding:
-            Qs = _safe_sharding_constraint(Qs, Qs_sharding)
-
-        # Calculate and print sizes for preconditioners and momentum
-        Qs_n_elements = sum([q.size for q in jax.tree.leaves(Qs)])
-        Qs_size_MB = sum(
-            [q.size * q.dtype.itemsize / (2**20) for q in jax.tree.leaves(Qs)]
-        )
-        if jax.process_index() == 0:
-            print(
-                f"PSGD Preconditioners size: {Qs_n_elements} elements, "
-                f"{Qs_size_MB:.2f} MB"
+            Qs = jax.tree.map(
+                broadcast_qs, params, partitioned_shapes, Qs, scanned_sizes
             )
-        if mu is not None:
-            mu_n_elements = sum([p.size for p in jax.tree.leaves(mu)])
-            mu_size_MB = sum(
-                [p.size * p.dtype.itemsize / (2**20) for p in jax.tree.leaves(mu)]
+            if have_qs_sharding:
+                Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+
+            # Calculate and print sizes for preconditioners and momentum
+            Qs_n_elements = sum([q.size for q in jax.tree.leaves(Qs)])
+            Qs_size_MB = sum(
+                [q.size * q.dtype.itemsize / (2**20) for q in jax.tree.leaves(Qs)]
             )
             if jax.process_index() == 0:
                 print(
-                    f"PSGD Momentum size: {mu_n_elements} elements, {mu_size_MB:.2f} MB"
+                    f"PSGD Preconditioners size: {Qs_n_elements} elements, "
+                    f"{Qs_size_MB:.2f} MB"
                 )
+            if mu is not None:
+                mu_n_elements = sum([p.size for p in jax.tree.leaves(mu)])
+                mu_size_MB = sum(
+                    [p.size * p.dtype.itemsize / (2**20) for p in jax.tree.leaves(mu)]
+                )
+                if jax.process_index() == 0:
+                    print(
+                        f"PSGD Momentum size: {mu_n_elements} elements, {mu_size_MB:.2f} MB"
+                    )
 
-        # initial state
+        if return_partition_specs_only:
+            return dict(
+                count=PartitionSpec(),
+                mu=mu_sharding,
+                Qs_preconditioners=Qs_sharding,
+                update_counter=PartitionSpec(),
+            )
+
         return dict(
             count=jnp.zeros([], jnp.int32),
             mu=mu,
@@ -413,7 +429,7 @@ def scale_by_kron(
         # which preconditioners will be diagonal
         dim_diag = jax.tree.map(
             lambda g, s: _get_preconditioner_types(
-                g.shape[1:] if s else g.shape,
+                g.shape[int(s) :],
                 max_size_triangular,
                 min_ndim_triangular,
                 memory_save_mode,
@@ -432,7 +448,7 @@ def scale_by_kron(
                 scanned_layers_,
             )
             sharding_without_scan = jax.tree.map(
-                lambda sh, s: PartitionSpec(*(sh[1:] if s else sh)),
+                lambda sh, s: PartitionSpec(*(sh[int(s) :])),
                 params_sharding_,
                 scanned_layers_,
             )
@@ -444,13 +460,11 @@ def scale_by_kron(
         original_shapes = None
         if merge_small_dims:
             original_shapes = jax.tree.map(
-                lambda g, s: g.shape[1:] if s else g.shape,
-                momentum_updates,
-                scanned_layers_,
+                lambda g, s: g.shape[int(s) :], momentum_updates, scanned_layers_
             )
             output = jax.tree.map(
                 lambda g, dd, s, sh: _merge_small_dims(
-                    g.shape[1:] if s else g.shape, target_merged_dim_size, dd, sh
+                    g.shape[int(s) :], target_merged_dim_size, dd, sh
                 ),
                 momentum_updates,
                 dim_diag,
@@ -491,9 +505,7 @@ def scale_by_kron(
         partitioned_shapes = None
         if partition_grads_into_blocks:
             partitioners = jax.tree.map(
-                lambda g, dd, s: BlockPartitioner(
-                    g.shape[1:] if s else g.shape, block_size, dd
-                ),
+                lambda g, dd, s: BlockPartitioner(g.shape[int(s) :], block_size, dd),
                 momentum_updates,
                 dim_diag,
                 scanned_layers_,
@@ -506,9 +518,7 @@ def scale_by_kron(
                 scanned_layers_,
             )
             partitioned_shapes = jax.tree.map(
-                lambda _, g, s: jax.tree.map(
-                    lambda x: x.shape[1:] if s else x.shape, g
-                ),
+                lambda _, g, s: jax.tree.map(lambda x: x.shape[int(s) :], g),
                 dummy_updates_tree,
                 momentum_updates,
                 scanned_layers_,
@@ -539,9 +549,7 @@ def scale_by_kron(
             if have_params_sharding:
                 # add dim to sharding specs for new stacked dim
                 partitioned_sharding = jax.tree.map(
-                    lambda mps, s: PartitionSpec(
-                        *(mps[:1] + (None,) + mps[1:] if s else (None,) + mps)
-                    ),
+                    lambda mps, s: PartitionSpec(*(mps[: int(s)] + (None,) + mps[1:])),
                     merged_params_sharding,
                     scanned_layers_,
                 )
@@ -555,18 +563,17 @@ def scale_by_kron(
         Qs = state["Qs_preconditioners"]
         Qs_sharding = None
         exprs_and_sharding = jax.tree.map(
-            lambda g, q, dd, sh, nm: _init_Q_exprs(
-                _first_n_dims(g, nm),
+            lambda g, dd, sh, nm: _init_Q_exprs(
+                g.shape[nm:],
                 preconditioner_init_scale,
                 dd,
                 precond_dtype,
-                existing_Q=jax.tree.map(lambda q: _first_n_dims(q, nm), q),
+                existing_Q=True,
                 precond_sharding=preconditioner_sharding_,
                 param_sharding=sh,
                 buffer_qq=buffer_qq,
             ),
             momentum_updates,
-            Qs,
             dim_diag,
             sharding_without_scan if have_params_sharding else nones,
             n_dims_to_map,
@@ -978,6 +985,36 @@ def kron(
     return chain(*optimizer)
 
 
+def get_opt_state_partition_specs(
+    params: base.Params, scale_by_kron_only: bool = False, **kwargs
+):
+    """Get tree of PartitionSpecs for kron optimizer state.
+
+    Args:
+        params: pytree of params
+        scale_by_kron_only: bool, If True, only returns partition specs for the
+            `scale_by_kron` function, otherwise the `kron` function.
+        kwargs: kwargs for kron (or scale_by_kron).
+
+    Returns:
+        opt_state PartitionSpecs tree.
+    """
+    params_flat, params_struct = jax.tree.flatten(params)
+    if isinstance(params_flat[0], nn.Partitioned):
+        params_flat = [p.unbox(p) for p in params_flat]
+    params = params_struct.unflatten(params_flat)
+
+    specs = scale_by_kron(**kwargs).init(params, return_partition_specs_only=True)
+
+    if not scale_by_kron_only:
+        specs = (specs,)
+        if kwargs.get("weight_decay", 0.0) > 0.0:
+            specs += (None,)
+        specs += (None,)
+
+    return specs
+
+
 def _get_preconditioner_types(
     shape: Tuple[int, ...], max_size: int, min_ndim: int, mem_save_mode: Optional[str]
 ) -> List[bool]:
@@ -1006,7 +1043,7 @@ def _get_preconditioner_types(
 
 
 def _init_Q_exprs(
-    t,
+    t_shape,
     scale,
     dim_diag,
     dtype,
@@ -1032,10 +1069,9 @@ def _init_Q_exprs(
     """
     have_qs_sharding = precond_sharding is not None or param_sharding is not None
     letters = string.ascii_lowercase + string.ascii_uppercase
-    shape = t.shape
-    if len(shape) == 0:  # scalar
+    if len(t_shape) == 0:  # scalar
         Q = (
-            [scale * jnp.ones_like(t, dtype=dtype)]
+            [scale * jnp.ones(t_shape, dtype=dtype)]
             if existing_Q is None
             else existing_Q
         )
@@ -1047,11 +1083,11 @@ def _init_Q_exprs(
         if have_qs_sharding:
             sharding_out = [PartitionSpec()]
     else:  # tensor
-        if len(shape) > 13:
+        if len(t_shape) > 13:
             raise ValueError(
-                f"Got tensor with dim {len(t.shape)}; Einstein runs out of letters!"
+                f"Got tensor with dim {len(t_shape.shape)}; Einstein runs out of letters!"
             )
-        scale = scale ** (1 / len(shape))
+        scale = scale ** (1 / len(t_shape))
         Q = [] if existing_Q is None else existing_Q
         piece1A, piece2A, piece3A = ([], "", "")
         exprGs = []
@@ -1059,12 +1095,12 @@ def _init_Q_exprs(
 
         params_specs = param_sharding
         if param_sharding is None:
-            params_specs = PartitionSpec(*((None,) * len(shape)))
-        sharding_out = [None] * len(shape)
+            params_specs = PartitionSpec(*((None,) * len(t_shape)))
+        sharding_out = [None] * len(t_shape)
         if have_qs_sharding:
-            sharding_out = [PartitionSpec(None)] * len(shape)
+            sharding_out = [PartitionSpec(None)] * len(t_shape)
 
-        for i, (size, dim_d, dim_sh) in enumerate(zip(shape, dim_diag, params_specs)):
+        for i, (size, dim_d, dim_sh) in enumerate(zip(t_shape, dim_diag, params_specs)):
             if dim_d:
                 # use diagonal matrix as preconditioner for this dim
                 if existing_Q is None:
@@ -1078,7 +1114,7 @@ def _init_Q_exprs(
                 piece1 = "".join(
                     [
                         (letters[i + 13] if j == i else letters[j])
-                        for j in range(len(shape))
+                        for j in range(len(t_shape))
                     ]
                 )
                 exprGs.append(piece1 + "," + piece1 + "->" + letters[i + 13])
@@ -1129,13 +1165,13 @@ def _init_Q_exprs(
                 piece1 = "".join(
                     [
                         (letters[i + 13] if j == i else letters[j])
-                        for j in range(len(shape))
+                        for j in range(len(t_shape))
                     ]
                 )
                 piece2 = "".join(
                     [
                         (letters[i + 26] if j == i else letters[j])
-                        for j in range(len(shape))
+                        for j in range(len(t_shape))
                     ]
                 )
                 exprGs.append(
@@ -1389,6 +1425,20 @@ class BlockPartitioner:
                 split_sizes.append(np.array([d], dtype=np.int32))
         self._split_sizes = split_sizes
 
+        # TODO (evanatyourservice)
+        # this might fail with scalar params but for now we're reshaping those
+        single_shape = [a[0] for a in split_sizes]
+        padded_single_shape = [
+            -(-dim // block_size) * block_size for dim in single_shape
+        ]
+        stack_size = np.prod([max(1, len(s)) for s in split_sizes])
+        self._padded_stacked_shape = tuple([stack_size] + padded_single_shape)
+
+        print(f"param shape: {param_shape}")
+        print(f"splits: {self._splits}")
+        print(f"split sizes: {self._split_sizes}")
+        print(f"padded stacked shape: {self._padded_stacked_shape}")
+
     def split_sizes(self):
         return self._split_sizes
 
@@ -1589,3 +1639,59 @@ def _unstack_matrices(stacked_arrays, revert_indices):
     if in_tuple:
         return tuple(array_list)
     return array_list
+
+
+def _test_block_partitioner():
+    """Test BlockPartitioner with various shapes."""
+    test_cases = [
+        # (shape, block_size, dim_diag)
+        ((16, 16), 8, [False, False]),
+        ((32, 16), 8, [False, False]),
+        ((64, 32, 15), 16, [False, False, False]),
+        ((128,), 32, [False]),
+        ((256, 100), 64, [False, True]),
+        ((1024, 512), 256, [False, False]),
+    ]
+
+    for shape, block_size, dim_diag in test_cases:
+        print(f"\nTesting shape {shape} with block_size {block_size}")
+
+        # Create test tensor
+        test_tensor = jnp.ones(shape)
+
+        # Initialize partitioner
+        partitioner = BlockPartitioner(shape, block_size, dim_diag)
+
+        # Test partition and merge
+        partitioned = partitioner.partition(test_tensor)
+        merged = partitioner.merge_partitions(partitioned)
+
+        # Test padding and stacking
+        padded_stacked = _pad_and_stack_matrices(partitioned, block_size)
+        unstacked_unpadded = _unstack_and_unpad_matrices(
+            padded_stacked, [p.shape for p in partitioned]
+        )
+
+        # Verify results
+        print(f"Number of partitions: {len(partitioned)}")
+        print(f"Partition shapes: {[p.shape for p in partitioned]}")
+        print(f"Padded and stacked shape: {padded_stacked.shape}")
+        print(f"Original shape: {test_tensor.shape}")
+        print(f"Merged shape: {merged.shape}")
+
+        # Check if shapes match
+        assert (
+            merged.shape == test_tensor.shape
+        ), f"Shape mismatch: {merged.shape} != {test_tensor.shape}"
+        # Check if values are preserved after partition and merge
+        assert jnp.allclose(
+            merged, test_tensor
+        ), "Values not preserved after partition and merge"
+        # Check if values are preserved after padding/stacking/unstacking/unpadding
+        assert all(
+            jnp.allclose(p1, p2) for p1, p2 in zip(partitioned, unstacked_unpadded)
+        ), "Values not preserved after padding/stacking operations"
+
+
+if __name__ == "__main__":
+    _test_block_partitioner()
