@@ -57,7 +57,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TrainingArguments:
     output_dir: str = field(
-        metadata={"help": ("The output directory where the model predictions and checkpoints will be written.")},
+        metadata={
+            "help": (
+                "The output directory where the model predictions and checkpoints will be written."
+            )
+        }
     )
     overwrite_output_dir: bool = field(
         default=False,
@@ -70,36 +74,58 @@ class TrainingArguments:
     )
     no_cache: bool = field(default=False, metadata={"help": "Uses jax cache."})
     cache_dir: str = field(
-        default="jax_cache",
-        metadata={"help": ("Location for jax cache.")},
+        default="jax_cache", metadata={"help": ("Location for jax cache.")}
     )
     do_train: bool = field(default=False, metadata={"help": "Whether to run training."})
-    do_eval: bool = field(default=False, metadata={"help": "Whether to run eval on the dev set."})
-    max_length: Optional[int] = field(default=None, metadata={"help": "max length used by tokenizer"})
-    max_target_length: Optional[int] = field(default=None, metadata={"help": "max target length used for prediction"})
+    do_eval: bool = field(
+        default=False, metadata={"help": "Whether to run eval on the dev set."}
+    )
+    max_length: Optional[int] = field(
+        default=None, metadata={"help": "max length used by tokenizer"}
+    )
+    max_target_length: Optional[int] = field(
+        default=None, metadata={"help": "max target length used for prediction"}
+    )
     max_prefill_predict_length: Optional[int] = field(
         default=None, metadata={"help": "max prefill length used for prediction"}
     )
-    checkpoints_to_keep: Optional[int] = field(default=None, metadata={"help": "Number of checkpoints to keep."})
-    n_predict: Optional[int] = field(default=0, metadata={"help": "Number of predictions."})
-    n_predict_batch: Optional[int] = field(default=None, metadata={"help": "Batch size for training."})
-    predict_num_beams: Optional[int] = field(default=1, metadata={"help": "Num beams used during prediction."})
-    predict_temperature: Optional[float] = field(default=1.0, metadata={"help": "Temperature used during prediction."})
+    checkpoints_to_keep: Optional[int] = field(
+        default=None, metadata={"help": "Number of checkpoints to keep."}
+    )
+    n_predict: Optional[int] = field(
+        default=0, metadata={"help": "Number of predictions."}
+    )
+    n_predict_batch: Optional[int] = field(
+        default=None, metadata={"help": "Batch size for training."}
+    )
+    predict_num_beams: Optional[int] = field(
+        default=1, metadata={"help": "Num beams used during prediction."}
+    )
+    predict_temperature: Optional[float] = field(
+        default=1.0, metadata={"help": "Temperature used during prediction."}
+    )
 
-    batch_size_per_node: Optional[int] = field(default=64, metadata={"help": "Batch size for training."})
-    valid_batch_size_per_node: Optional[int] = field(default=None, metadata={"help": "Batch size for validation."})
+    batch_size_per_node: Optional[int] = field(
+        default=64, metadata={"help": "Batch size for training."}
+    )
+    valid_batch_size_per_node: Optional[int] = field(
+        default=None, metadata={"help": "Batch size for validation."}
+    )
 
     gradient_accumulation_steps: int = field(
         default=1,
-        metadata={"help": ("Number of updates steps to accumulate before performing an update" " pass.")},
+        metadata={
+            "help": (
+                "Number of updates steps to accumulate before performing an update"
+                " pass."
+            )
+        },
     )
     freeze_vision: bool = field(
-        default=False,
-        metadata={"help": ("Freezes vision tower.")},
+        default=False, metadata={"help": ("Freezes vision tower.")}
     )
     vision_projection_only: bool = field(
-        default=False,
-        metadata={"help": ("Train only vision projection.")},
+        default=False, metadata={"help": ("Train only vision projection.")}
     )
     reinit_text: bool = field(
         default=False,
@@ -107,33 +133,52 @@ class TrainingArguments:
     )
     reinit_vision_projection: bool = field(
         default=False,
-        metadata={"help": ("Reinit vision projection parameters when loading from a checkpoint.")},
+        metadata={
+            "help": (
+                "Reinit vision projection parameters when loading from a checkpoint."
+            )
+        },
     )
     set_opt_spec_vision_to_none: bool = field(
-        default=False,
-        metadata={"help": "Set the optimizer vision spec to None."},
+        default=False, metadata={"help": "Set the optimizer vision spec to None."}
     )
     loss_type: str = field(
         default="cross_entropy",
-        metadata={"help": ("The type of loss to use. Can be 'cross_entropy' (default) or 'sigmoid'.")},
+        metadata={
+            "help": (
+                "The type of loss to use. Can be 'cross_entropy' (default) or 'sigmoid'."
+            )
+        },
     )
-    remat_policy: str = field(default="none", metadata={"help": "Use gradient checkpointing."})
-    learning_rate: float = field(default=5e-5, metadata={"help": "The initial learning rate."})
+    remat_policy: str = field(
+        default="none", metadata={"help": "Use gradient checkpointing."}
+    )
+    learning_rate: float = field(
+        default=5e-5, metadata={"help": "The initial learning rate."}
+    )
     optim: str = field(
         default="distributed_shampoo",
-        metadata={"help": ('The optimizer to use. Can be "distributed_shampoo" (default), "kron", "adam" or "adafactor"')},
+        metadata={
+            "help": (
+                'The optimizer to use. Can be "distributed_shampoo" (default), "kron", "adam" or "adafactor"'
+            )
+        },
     )
-    weight_decay: float = field(default=0.0, metadata={"help": "Weight decay applied to parameters."})
+    weight_decay: float = field(
+        default=0.0, metadata={"help": "Weight decay applied to parameters."}
+    )
     beta1: float = field(
-        default=0.9,
-        metadata={"help": "Beta1 for Adam & Distributed Shampoo."},
+        default=0.9, metadata={"help": "Beta1 for Adam & Distributed Shampoo."}
     )
     beta2: float = field(
-        default=0.99,
-        metadata={"help": "Beta2 for for Adam & Distributed Shampoo."},
+        default=0.99, metadata={"help": "Beta2 for for Adam & Distributed Shampoo."}
     )
-    adam_epsilon: float = field(default=1e-8, metadata={"help": "Epsilon for AdamW optimizer."})
-    max_grad_norm: float = field(default=1.0, metadata={"help": "Max gradient norm for Adafactor."})
+    adam_epsilon: float = field(
+        default=1e-8, metadata={"help": "Epsilon for AdamW optimizer."}
+    )
+    max_grad_norm: float = field(
+        default=1.0, metadata={"help": "Max gradient norm for Adafactor."}
+    )
     block_size_text: int = field(
         default=1024,
         metadata={"help": "Chunked size for large layers with Distributed Shampoo."},
@@ -144,15 +189,15 @@ class TrainingArguments:
     )
     kron_mem_save_mode: Optional[str] = field(
         default=None,
-        metadata={"help": "Kron memory save mode, can be None, 'one_diag', or 'all_diag'."},
+        metadata={
+            "help": "Kron memory save mode, can be None, 'one_diag', or 'all_diag'."
+        },
     )
     kron_merge_small_dims: bool = field(
-        default=False,
-        metadata={"help": "Merge small dimensions for Kron."},
+        default=False, metadata={"help": "Merge small dimensions for Kron."}
     )
     caspr_variant: bool = field(
-        default=False,
-        metadata={"help": "Use CASPR variant of Distributed Shampoo."},
+        default=False, metadata={"help": "Use CASPR variant of Distributed Shampoo."}
     )
     preconditioning_compute_steps: int = field(
         default=20, metadata={"help": "Number of steps to update preconditioner."}
@@ -176,16 +221,25 @@ class TrainingArguments:
     )
     clip_by_scaled_gradient_norm: float = field(
         default=None,
-        metadata={"help": "Clip by scaled gradient norm (only useful when using RMSProp Grafting)."},
+        metadata={
+            "help": "Clip by scaled gradient norm (only useful when using RMSProp Grafting)."
+        },
     )
     optim_quantized: bool = field(
         default=False,
-        metadata={"help": ("Whether to quantize optimizer (only supported with Distributed" " Shampoo).")},
+        metadata={
+            "help": (
+                "Whether to quantize optimizer (only supported with Distributed"
+                " Shampoo)."
+            )
+        },
     )
     shard_shampoo_across: str = field(
         default="data",
         metadata={
-            "help": ("Whether to shard the optimizer across data devices (data), model devices (model) or both (2d).")
+            "help": (
+                "Whether to shard the optimizer across data devices (data), model devices (model) or both (2d)."
+            )
         },
     )
     activation_partitioning_dims: int = field(
@@ -196,67 +250,101 @@ class TrainingArguments:
         default=1,
         metadata={"help": "Number of dimensions to partition parameters, 1 or 2."},
     )
-    num_train_epochs: int = field(default=3, metadata={"help": "Total number of training epochs to perform."})
-    warmup_steps: int = field(default=500, metadata={"help": "Linear warmup over warmup_steps."})
+    num_train_epochs: int = field(
+        default=3, metadata={"help": "Total number of training epochs to perform."}
+    )
+    warmup_steps: int = field(
+        default=500, metadata={"help": "Linear warmup over warmup_steps."}
+    )
     lr_decay: str = field(
         default=None,
         metadata={
-            "help": ("Decay to be used in the learning rate scheduler. Can be None, linear, cosine or exponential.")
+            "help": (
+                "Decay to be used in the learning rate scheduler. Can be None, linear, cosine or exponential."
+            )
         },
     )
     lr_transition_steps: int = field(
         default=None,
-        metadata={"help": ("Number of transition steps associated with learning rate decay when applicable.")},
+        metadata={
+            "help": (
+                "Number of transition steps associated with learning rate decay when applicable."
+            )
+        },
     )
     ds_train_size_for_transition_steps: int = field(
         default=None,
-        metadata={"help": ("Number of training samples for calculating transition steps for learning rate decay.")},
+        metadata={
+            "help": (
+                "Number of training samples for calculating transition steps for learning rate decay."
+            )
+        },
     )
     lr_decay_rate: float = field(
         default=None,
-        metadata={"help": ("Decay rate associated with learning rate when using exponential decay.")},
+        metadata={
+            "help": (
+                "Decay rate associated with learning rate when using exponential decay."
+            )
+        },
     )
     lr_staircase: bool = field(
         default=False,
-        metadata={"help": ("Whether to use staircase or continuous learning rate when using exponential decay.")},
+        metadata={
+            "help": (
+                "Whether to use staircase or continuous learning rate when using exponential decay."
+            )
+        },
     )
     lr_offset: int = field(
         default=0,
         metadata={"help": "Number of steps to offset learning rate and keep it at 0."},
     )
-    logging_steps: int = field(default=50, metadata={"help": "Log every X updates steps."})
-    eval_steps: int = field(default=500, metadata={"help": "Run an evaluation every X steps."})
-    save_steps: int = field(default=None, metadata={"help": "Save checkpoint every X updates steps."})
+    logging_steps: int = field(
+        default=50, metadata={"help": "Log every X updates steps."}
+    )
+    eval_steps: int = field(
+        default=500, metadata={"help": "Run an evaluation every X steps."}
+    )
+    save_steps: int = field(
+        default=None, metadata={"help": "Save checkpoint every X updates steps."}
+    )
     log_norm: bool = field(
         default=True,
         metadata={"help": "Log parameters and gradients norm at this frequency."},
     )
     log_histogram_steps: int = field(
         default=False,
-        metadata={"help": ("Log parameters and gradients histograms at this frequency. Slows down" " training.")},
+        metadata={
+            "help": (
+                "Log parameters and gradients histograms at this frequency. Slows down"
+                " training."
+            )
+        },
     )
 
     seed_model: int = field(
         default=42,
-        metadata={"help": ("Random seed for the model that will be set at the beginning of" " training.")},
+        metadata={
+            "help": (
+                "Random seed for the model that will be set at the beginning of"
+                " training."
+            )
+        },
     )
 
     wandb_entity: Optional[str] = field(
-        default=None,
-        metadata={"help": "The wandb entity to use (for teams)."},
+        default=None, metadata={"help": "The wandb entity to use (for teams)."}
     )
     wandb_project: str = field(
-        default="clip-jax",
-        metadata={"help": "The name of the wandb project."},
+        default="clip-jax", metadata={"help": "The name of the wandb project."}
     )
     wandb_job_type: str = field(
-        default="train",
-        metadata={"help": "The name of the wandb job type."},
+        default="train", metadata={"help": "The name of the wandb job type."}
     )
 
     assert_TPU_available: bool = field(
-        default=False,
-        metadata={"help": "Verify that TPU is not in use."},
+        default=False, metadata={"help": "Verify that TPU is not in use."}
     )
 
     mp_devices: Optional[int] = field(
@@ -270,12 +358,10 @@ class TrainingArguments:
     )
 
     do_profile: bool = field(
-        default=False,
-        metadata={"help": "Profile performance of training loop."},
+        default=False, metadata={"help": "Profile performance of training loop."}
     )
     do_test_steps: int = field(
-        default=False,
-        metadata={"help": "Run script for only a few steps."},
+        default=False, metadata={"help": "Run script for only a few steps."}
     )
 
     dp_devices: int = field(init=False)
@@ -286,7 +372,9 @@ class TrainingArguments:
 
     def __post_init__(self):
         if self.assert_TPU_available:
-            assert jax.local_device_count() > 1, "TPUs in use, please check running processes"
+            assert (
+                jax.local_device_count() > 1
+            ), "TPUs in use, please check running processes"
         if self.output_dir is not None:
             self.output_dir = os.path.expanduser(self.output_dir)
         if (
@@ -355,21 +443,29 @@ class TrainingArguments:
             1,
             2,
         ], "Only 1D and 2D parameter partitioning supported."
-        assert self.mp_devices > 0, "Number of devices for model parallelism must be > 0"
+        assert (
+            self.mp_devices > 0
+        ), "Number of devices for model parallelism must be > 0"
         assert jax.device_count() % self.mp_devices == 0, (
             f"Number of available devices ({jax.device_count()} must be divisible by"
             f" number of devices used for model parallelism ({self.mp_devices})."
         )
         self.dp_devices = jax.device_count() // self.mp_devices
         # batch sizes
-        batch_size_per_node_per_step = self.batch_size_per_node * self.gradient_accumulation_steps
+        batch_size_per_node_per_step = (
+            self.batch_size_per_node * self.gradient_accumulation_steps
+        )
         self.batch_size_per_step = batch_size_per_node_per_step * jax.process_count()
         # define batch size for data loader
         self.train_batch_size = batch_size_per_node_per_step
-        self.valid_batch_size = self.valid_batch_size_per_node or self.batch_size_per_node
+        self.valid_batch_size = (
+            self.valid_batch_size_per_node or self.batch_size_per_node
+        )
         if self.ds_train_size_for_transition_steps is not None:
             self.lr_transition_steps = (
-                self.ds_train_size_for_transition_steps * self.num_train_epochs // self.batch_size_per_step
+                self.ds_train_size_for_transition_steps
+                * self.num_train_epochs
+                // self.batch_size_per_step
             )
             self.warmup_steps = int(self.lr_transition_steps * 0.1)
 
@@ -391,11 +487,15 @@ class ModelArguments:
     )
     config_name: Optional[str] = field(
         default=None,
-        metadata={"help": "Pretrained config name or path if not the same as model_name"},
+        metadata={
+            "help": "Pretrained config name or path if not the same as model_name"
+        },
     )
     tokenizer_name: Optional[str] = field(
         default=None,
-        metadata={"help": "Pretrained tokenizer name or path if not the same as model_name"},
+        metadata={
+            "help": "Pretrained tokenizer name or path if not the same as model_name"
+        },
     )
     dtype: Optional[str] = field(
         default="float32",
@@ -407,29 +507,26 @@ class ModelArguments:
         },
     )
     float32_logits: Optional[bool] = field(
-        default=False,
-        metadata={"help": ("Cast attention logits to float32.")},
+        default=False, metadata={"help": ("Cast attention logits to float32.")}
     )
     masked_pred_prob: Optional[float] = field(
-        default=None,
-        metadata={"help": ("Overwrites marked_pred_prob.")},
+        default=None, metadata={"help": ("Overwrites marked_pred_prob.")}
     )
     unroll: int = field(
-        default=1,
-        metadata={"help": ("Number of steps to unroll scanned layers.")},
+        default=1, metadata={"help": ("Number of steps to unroll scanned layers.")}
     )
     restore_state: Optional[bool] = field(
-        default=False,
-        metadata={"help": ("Restore optimizer.")},
+        default=False, metadata={"help": ("Restore optimizer.")}
     )
     num_labels: Optional[int] = field(
-        default=None,
-        metadata={"help": ("Number of labels for image classification.")},
+        default=None, metadata={"help": ("Number of labels for image classification.")}
     )
     config_metadata: Dict = field(init=False)
 
     def __post_init__(self):
-        assert self.config_name is not None, "config_name is required and is not inferred from model_name_or_path"
+        assert (
+            self.config_name is not None
+        ), "config_name is required and is not inferred from model_name_or_path"
         assert self.tokenizer_name is not None, "Tokenizer name is required."
         # get config metadata
         if ":" in self.config_name and not os.path.isdir(self.config_name):
@@ -446,7 +543,9 @@ class ModelArguments:
             if self.config_metadata is not None:
                 self.model_name_or_path = self.config_metadata["output_dir"]
         if self.restore_state is True:
-            assert self.config_metadata is not None, "Cannot restore state without config restored from W&B."
+            assert (
+                self.config_metadata is not None
+            ), "Cannot restore state without config restored from W&B."
 
 
 @dataclass
@@ -457,11 +556,15 @@ class DataTrainingArguments:
 
     train_folder: Optional[str] = field(
         default=None,
-        metadata={"help": "Path to the root training directory which contains tfrecords."},
+        metadata={
+            "help": "Path to the root training directory which contains tfrecords."
+        },
     )
     valid_folder: Optional[str] = field(
         default=None,
-        metadata={"help": "Path to the root validation directory which contains tfrecords."},
+        metadata={
+            "help": "Path to the root validation directory which contains tfrecords."
+        },
     )
     image_crop_size: Optional[int] = field(
         default=None,
@@ -469,25 +572,41 @@ class DataTrainingArguments:
     )
     image_crop_resize: Optional[int] = field(
         default=None,
-        metadata={"help": "The dimension cropped images need to be resized to, if needed."},
+        metadata={
+            "help": "The dimension cropped images need to be resized to, if needed."
+        },
     )
     min_original_image_size: Optional[int] = field(
         default=None,
-        metadata={"help": ("The minimum size (resolution) of each original image from training" " set.")},
+        metadata={
+            "help": (
+                "The minimum size (resolution) of each original image from training"
+                " set."
+            )
+        },
     )
     max_original_aspect_ratio: Optional[float] = field(
         default=None,
-        metadata={"help": ("The maximum aspect ratio of each original image from training set.")},
+        metadata={
+            "help": (
+                "The maximum aspect ratio of each original image from training set."
+            )
+        },
     )
     seed_dataset: Optional[int] = field(
-        default=None,
-        metadata={"help": "The seed used to augment the dataset."},
+        default=None, metadata={"help": "The seed used to augment the dataset."}
     )
-    format: Optional[str] = field(default="rgb", metadata={"help": "The format of the images (rgb or lab)."})
-    key_image: Optional[str] = field(default="webp", metadata={"help": "Name of the key containing the webp images."})
+    format: Optional[str] = field(
+        default="rgb", metadata={"help": "The format of the images (rgb or lab)."}
+    )
+    key_image: Optional[str] = field(
+        default="webp", metadata={"help": "Name of the key containing the webp images."}
+    )
     key_class: Optional[str] = field(
         default=None,
-        metadata={"help": "Name of the key containing the class id for classification."},
+        metadata={
+            "help": "Name of the key containing the class id for classification."
+        },
     )
     key_caption: Optional[str] = field(
         default="caption", metadata={"help": "Name of the key containing the captions."}
@@ -498,14 +617,22 @@ class DataTrainingArguments:
     )
     key_assistant: Optional[str] = field(
         default=None,
-        metadata={"help": "Name of the key containing the captions for assistant when using chat template."},
+        metadata={
+            "help": "Name of the key containing the captions for assistant when using chat template."
+        },
     )
     key_assistant_2: Optional[str] = field(
         default=None,
-        metadata={"help": "Name of a 2nd key containing elements for assistant when using chat template."},
+        metadata={
+            "help": "Name of a 2nd key containing elements for assistant when using chat template."
+        },
     )
-    mean: Optional[List[float]] = field(default=(0.5, 0.5, 0.5), metadata={"help": "The mean of the dataset."})
-    std: Optional[List[float]] = field(default=(0.5, 0.5, 0.5), metadata={"help": "The std of the dataset."})
+    mean: Optional[List[float]] = field(
+        default=(0.5, 0.5, 0.5), metadata={"help": "The mean of the dataset."}
+    )
+    std: Optional[List[float]] = field(
+        default=(0.5, 0.5, 0.5), metadata={"help": "The std of the dataset."}
+    )
 
     def __post_init__(self):
         # correctly use defaults
@@ -578,7 +705,11 @@ def trainable_params(data, training_args):
     if training_args.freeze_vision:
         frozen_keys = ["vision:embeddings", "vision:encoder"]
     if training_args.vision_projection_only:
-        frozen_keys = [k for k in flatten_dict(data, sep=":").keys() if "vision_projection" not in k]
+        frozen_keys = [
+            k
+            for k in flatten_dict(data, sep=":").keys()
+            if "vision_projection" not in k
+        ]
     if frozen_keys is not None:
         data_train = {}
         for k, v in flatten_dict(data, sep=":").items():
@@ -612,7 +743,9 @@ class State:
     def from_config_metadata(cls, config_metadata, restore_state):
         if config_metadata is not None:
             init_state = {
-                k: config_metadata[k] for k, v in cls.__dataclass_fields__.items() if k in config_metadata and v.init
+                k: config_metadata[k]
+                for k, v in cls.__dataclass_fields__.items()
+                if k in config_metadata and v.init
             }
         else:
             init_state = {}
@@ -666,7 +799,11 @@ class State:
             metrics = jax.device_get(metrics)
             # unbox LogicallyPartitioned - https://github.com/google/maxtext/blob/ba01756ff0d96819fb2739bd6bc3648e0eeb8d2b/MaxText/max_utils.py#L77
             metrics = jax.tree_util.tree_map(
-                lambda x: x.unbox() if isinstance(x, flax.linen.spmd.LogicallyPartitioned) else x,
+                lambda x: (
+                    x.unbox()
+                    if isinstance(x, flax.linen.spmd.LogicallyPartitioned)
+                    else x
+                ),
                 metrics,
                 is_leaf=lambda k: isinstance(k, flax.linen.spmd.LogicallyPartitioned),
             )
@@ -698,11 +835,15 @@ def main():
     # cluster initialization
     jax.distributed.initialize()
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser(
+        (ModelArguments, DataTrainingArguments, TrainingArguments)
+    )
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args = parser.parse_json_file(
+            json_file=os.path.abspath(sys.argv[1])
+        )
     else:
         model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
@@ -749,12 +890,18 @@ def main():
         )
 
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, padding_side="right")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_args.tokenizer_name, padding_side="right"
+    )
     if training_args.n_predict:
-        tokenizer_predict = AutoTokenizer.from_pretrained(model_args.tokenizer_name, padding_side="left")
+        tokenizer_predict = AutoTokenizer.from_pretrained(
+            model_args.tokenizer_name, padding_side="left"
+        )
 
     # Create mesh
-    logger.info(f"Creating a mesh of ({training_args.dp_devices}, {training_args.mp_devices})")
+    logger.info(
+        f"Creating a mesh of ({training_args.dp_devices}, {training_args.mp_devices})"
+    )
     dev_mesh = create_device_mesh((training_args.dp_devices, training_args.mp_devices))
     mesh = Mesh(dev_mesh, ("data", "model"))
     logger.info(f"Mesh: {mesh.shape}")
@@ -763,7 +910,9 @@ def main():
     clipConfig = load_config(model_args.config_name)
     isMaxtext = "decoder_block" in clipConfig["text_config"]
     is_classification = dataset.key_class is not None
-    assert not (isMaxtext and is_classification), "Cannot be both MaxText and classification."
+    assert not (
+        isMaxtext and is_classification
+    ), "Cannot be both MaxText and classification."
 
     # Update config
     maxtext_args = None
@@ -779,16 +928,16 @@ def main():
     max_target_length = (
         training_args.max_target_length
         if training_args.max_target_length is not None
-        else training_args.max_length * 2
-        if training_args.max_length is not None
-        else 1024
+        else (
+            training_args.max_length * 2
+            if training_args.max_length is not None
+            else 1024
+        )
     )
     max_prefill_predict_length = (
         training_args.max_prefill_predict_length
         if training_args.max_prefill_predict_length is not None
-        else training_args.max_length
-        if training_args.max_length is not None
-        else 512
+        else training_args.max_length if training_args.max_length is not None else 512
     )
 
     if isMaxtext:
@@ -806,7 +955,9 @@ def main():
             clipConfig["text_config"]["pad_token_id"] = tokenizer.pad_token_id
     elif is_classification:
         clipConfig["num_labels"] = model_args.num_labels
-        clipConfig = {k: clipConfig[k] for k in ["num_labels", "vision_config", "dtype"]}
+        clipConfig = {
+            k: clipConfig[k] for k in ["num_labels", "vision_config", "dtype"]
+        }
     else:
         clipConfig["text_config"]["unroll"] = model_args.unroll
         clipConfig["text_config"]["float32_logits"] = model_args.float32_logits
@@ -816,18 +967,16 @@ def main():
     # Load model
     class_fn = CLIPVisionModelForImageClassification if is_classification else CLIPModel
     model = class_fn(
-        **{
-            **clipConfig,
-            "maxtext_mesh": maxtext_mesh,
-            "maxtext_args": maxtext_args,
-        }
+        **{**clipConfig, "maxtext_mesh": maxtext_mesh, "maxtext_args": maxtext_args}
     )
     max_length = (
         1
         if is_classification
-        else training_args.max_length
-        if training_args.max_length is not None
-        else model.text_config["max_length"]
+        else (
+            training_args.max_length
+            if training_args.max_length is not None
+            else model.text_config["max_length"]
+        )
     )
     model_eval = (
         model
@@ -855,11 +1004,15 @@ def main():
         )
     )
     clipConfig = {
-        k: v for k, v in asdict(model).items() if k not in ["parent", "name", "maxtext_mesh", "maxtext_args"]
+        k: v
+        for k, v in asdict(model).items()
+        if k not in ["parent", "name", "maxtext_mesh", "maxtext_args"]
     }
 
     # Load state
-    state = State.from_config_metadata(model_args.config_metadata, model_args.restore_state)
+    state = State.from_config_metadata(
+        model_args.config_metadata, model_args.restore_state
+    )
 
     # set rng
     rng = jax.random.PRNGKey(training_args.seed_model)
@@ -870,9 +1023,13 @@ def main():
     # Parameter count
     num_params = {
         "Total": count_params(logical_params),
-        "Text": 0
-        if is_classification
-        else count_params(logical_params["text" if "text" in logical_params else "text_model"]),
+        "Text": (
+            0
+            if is_classification
+            else count_params(
+                logical_params["text" if "text" in logical_params else "text_model"]
+            )
+        ),
         "Vision": count_params(logical_params["vision"]),
     }
 
@@ -880,7 +1037,9 @@ def main():
     logger.info(f"Num epochs: {training_args.num_train_epochs}")
     logger.info(f"Batch size per node = {training_args.batch_size_per_node}")
     logger.info(f"Number of devices = {jax.device_count()}")
-    logger.info(f"Gradient accumulation steps = {training_args.gradient_accumulation_steps}")
+    logger.info(
+        f"Gradient accumulation steps = {training_args.gradient_accumulation_steps}"
+    )
     logger.info(f"Batch size per update = {training_args.batch_size_per_step}")
     logger.info(
         f"Model parameters: Text {num_params['Text']:,} + Vision {num_params['Vision']:,} + Projection = {num_params['Total']:,}"
@@ -961,7 +1120,9 @@ def main():
             params = model.init_weights(rng)["params"]
         else:
             # init to 0 (faster)
-            params = jax.tree.map(lambda x: jnp.zeros(x.shape, dtype=x.dtype), logical_params)
+            params = jax.tree.map(
+                lambda x: jnp.zeros(x.shape, dtype=x.dtype), logical_params
+            )
         return params
 
     # Set params
@@ -972,16 +1133,26 @@ def main():
     def _restore_checkpoint(ckpt, dir, step):
         logger.info(f"Restoring checkpoint from {dir} at step {step}")
         restore_args = orbax_utils.restore_args_from_target(ckpt, mesh)
-        orbax_options = orbax.checkpoint.CheckpointManagerOptions(enable_async_checkpointing=False)
-        checkpoint_manager = orbax.checkpoint.CheckpointManager(dir, orbax_checkpointer, orbax_options)
+        orbax_options = orbax.checkpoint.CheckpointManagerOptions(
+            enable_async_checkpointing=False
+        )
+        checkpoint_manager = orbax.checkpoint.CheckpointManager(
+            dir, orbax_checkpointer, orbax_options
+        )
         if training_args.reinit_text:
             logger.info("Text parameters were not restored from checkpoint")
             # NOTE: used in LiT setting, we also need to reinit any head, logit bias and logit scale
             transforms = {
-                r"(.*)(text|logit_bias|logit_scale|MAPHead)(.*)": orbax.checkpoint.Transform(use_fallback=True)
+                r"(.*)(text|logit_bias|logit_scale|MAPHead)(.*)": orbax.checkpoint.Transform(
+                    use_fallback=True
+                )
             }
         elif training_args.reinit_vision_projection:
-            transforms = {r"(.*)(vision_projection)(.*)": orbax.checkpoint.Transform(use_fallback=True)}
+            transforms = {
+                r"(.*)(vision_projection)(.*)": orbax.checkpoint.Transform(
+                    use_fallback=True
+                )
+            }
         else:
             transforms = {}
         return checkpoint_manager.restore(
@@ -1004,8 +1175,7 @@ def main():
                 return new_schedule
             else:
                 return optax.join_schedules(
-                    schedules=[schedule, new_schedule],
-                    boundaries=[boundary],
+                    schedules=[schedule, new_schedule], boundaries=[boundary]
                 )
 
         # build schedule
@@ -1015,7 +1185,9 @@ def main():
         # offset
         lr_offset = training_args.lr_offset + state.opt_state_step
         if lr_offset:
-            schedule_fn = _add_schedule(schedule_fn, optax.constant_schedule(0.0), last_boundary)
+            schedule_fn = _add_schedule(
+                schedule_fn, optax.constant_schedule(0.0), last_boundary
+            )
             last_boundary += lr_offset
 
         # warmup
@@ -1077,12 +1249,16 @@ def main():
         preconditioner_axis = (
             training_args.shard_shampoo_across
             if training_args.shard_shampoo_across != "2d"
-            else "model"
-            if training_args.mp_devices > training_args.dp_devices
-            else "data"
+            else (
+                "model"
+                if training_args.mp_devices > training_args.dp_devices
+                else "data"
+            )
         )
         preconditioner_num_devices = (
-            training_args.mp_devices if preconditioner_axis == "model" else training_args.dp_devices
+            training_args.mp_devices
+            if preconditioner_axis == "model"
+            else training_args.dp_devices
         )
         _opt = partial(
             distributed_shampoo,
@@ -1092,14 +1268,18 @@ def main():
             matrix_epsilon=1e-6,
             weight_decay=training_args.weight_decay,
             caspr_variant=training_args.caspr_variant,
-            start_preconditioning_step=max(training_args.preconditioning_compute_steps + 1, 101),
+            start_preconditioning_step=max(
+                training_args.preconditioning_compute_steps + 1, 101
+            ),
             preconditioning_compute_steps=training_args.preconditioning_compute_steps,
             statistics_compute_steps=1,
             best_effort_shape_interpretation=True,
             graft_type=graft_type,
             nesterov=training_args.nesterov,
             exponent_override=0,
-            preconditioner_partition_spec=PartitionSpec(preconditioner_axis, None, None),
+            preconditioner_partition_spec=PartitionSpec(
+                preconditioner_axis, None, None
+            ),
             num_devices_for_pjit=preconditioner_num_devices,
             shard_optimizer_states=True,
             inverse_failure_threshold=0.1,
@@ -1133,18 +1313,26 @@ def main():
         # for main optimizer, we need to allow scanned layers
         optimizer = {}
         opt_fn = {}
-        for k, p in split_scanned_params(trainable_params(logical_params, training_args)).items():
+        for k, p in split_scanned_params(
+            trainable_params(logical_params, training_args)
+        ).items():
             if ("scanned_text" in k) or ("scanned_vision" in k):
                 # extract 1 layer
-                p = jax.eval_shape(lambda x: jax.tree_util.tree_map(lambda y: y[0], x), p)
+                p = jax.eval_shape(
+                    lambda x: jax.tree_util.tree_map(lambda y: y[0], x), p
+                )
             elif "scanned_maxtext" in k:
                 # extract 1 layer
-                p = jax.eval_shape(lambda x: jax.tree_util.tree_map(lambda y: y[:, 0], x), p)
+                p = jax.eval_shape(
+                    lambda x: jax.tree_util.tree_map(lambda y: y[:, 0], x), p
+                )
             optimizer[k] = (
                 opt_vision_none.init(p)
                 if (k == "vision" and training_args.set_opt_spec_vision_to_none)
                 else (
-                    opt_vision.init(p) if any(name in k for name in ["vision", "scanned_vision"]) else opt_text.init(p)
+                    opt_vision.init(p)
+                    if any(name in k for name in ["vision", "scanned_vision"])
+                    else opt_text.init(p)
                 )
             )
             opt_fn[k] = NamedTuple("opt_fn", pspec_fn=Any, shape_and_dtype_fn=Any)(
@@ -1152,7 +1340,11 @@ def main():
             )
             optimizer[k] = optax.GradientTransformation(
                 optimizer[k].init_fn,
-                update_fn_vision if any(name in k for name in ["vision", "scanned_vision"]) else update_fn_text,
+                (
+                    update_fn_vision
+                    if any(name in k for name in ["vision", "scanned_vision"])
+                    else update_fn_text
+                ),
             )
 
     elif training_args.optim == "kron":
@@ -1177,10 +1369,10 @@ def main():
                 target_merged_dim_size=4096,
                 partition_grads_into_blocks=True,
                 block_size=256,
-                buffer_qqconj=False,
+                buffer_qq=False,
                 params_sharding=params_spec,
                 preconditioner_sharding=PartitionSpec(None, None),
-            ),
+            )
         ]
         if training_args.weight_decay > 0.0:
             _opt.append(optax.add_decayed_weights(training_args.weight_decay))
@@ -1197,7 +1389,9 @@ def main():
         )
         optimizer = {
             k: _opt(learning_rate=learning_rate_fn)
-            for k in split_scanned_params(trainable_params(logical_params, training_args))
+            for k in split_scanned_params(
+                trainable_params(logical_params, training_args)
+            )
         }
 
     elif training_args.optim == "adafactor":
@@ -1208,18 +1402,24 @@ def main():
         )
         optimizer = {
             k: _opt(learning_rate=learning_rate_fn)
-            for k in split_scanned_params(trainable_params(logical_params, training_args))
+            for k in split_scanned_params(
+                trainable_params(logical_params, training_args)
+            )
         }
 
     # get PartitionSpecof optimizer state
     def get_opt_state_spec():
         # get opt_state shape without actual init
         opt_state_shape = {}
-        for k, p in split_scanned_params(trainable_params(logical_params, training_args)).items():
+        for k, p in split_scanned_params(
+            trainable_params(logical_params, training_args)
+        ).items():
             if ("scanned_text" in k) or ("scanned_vision" in k):
                 opt_state_shape[k] = jax.eval_shape(jax.vmap(optimizer[k].init), p)
             elif "scanned_maxtext" in k:
-                opt_state_shape[k] = jax.eval_shape(jax.vmap(optimizer[k].init, in_axes=1), p)
+                opt_state_shape[k] = jax.eval_shape(
+                    jax.vmap(optimizer[k].init, in_axes=1), p
+                )
             else:
                 opt_state_shape[k] = jax.eval_shape(optimizer[k].init, p)
 
@@ -1261,24 +1461,37 @@ def main():
                     kwargs["params_spec"],
                     (
                         PartitionSpec(None)
-                        if (kwargs["key"] == "vision" and training_args.set_opt_spec_vision_to_none)
+                        if (
+                            kwargs["key"] == "vision"
+                            and training_args.set_opt_spec_vision_to_none
+                        )
                         else statistics_partition_spec
                     ),
                 )
             else:
                 raise NotImplementedError
 
-        for k, p in split_scanned_params(trainable_params(logical_params, training_args)).items():
+        for k, p in split_scanned_params(
+            trainable_params(logical_params, training_args)
+        ).items():
             p_spec = split_spec[k]
             if ("scanned_text" in k) or ("scanned_vision" in k):
                 # extract 1 layer
-                p = jax.eval_shape(lambda x: jax.tree_util.tree_map(lambda y: y[0], x), p)
+                p = jax.eval_shape(
+                    lambda x: jax.tree_util.tree_map(lambda y: y[0], x), p
+                )
                 p_spec = jax.tree_util.tree_map(lambda y: PartitionSpec(*y[1:]), p_spec)
             elif "scanned_maxtext" in k:
                 # extract 1 layer
-                p = jax.eval_shape(lambda x: jax.tree_util.tree_map(lambda y: y[:, 0], x), p)
-                p_spec = jax.tree_util.tree_map(lambda y: PartitionSpec(y[0], *y[2:]), p_spec)
-            _opt_fn = opt_fn[k] if training_args.optim == "distributed_shampoo" else None
+                p = jax.eval_shape(
+                    lambda x: jax.tree_util.tree_map(lambda y: y[:, 0], x), p
+                )
+                p_spec = jax.tree_util.tree_map(
+                    lambda y: PartitionSpec(y[0], *y[2:]), p_spec
+                )
+            _opt_fn = (
+                opt_fn[k] if training_args.optim == "distributed_shampoo" else None
+            )
             opt_state_spec[k] = _get_spec(
                 params_spec=p_spec,
                 opt_state_shape=opt_state_shape[k],
@@ -1307,25 +1520,27 @@ def main():
     # when training only vision head, we may have too few parameters for sharding optimizer state
     if training_args.set_opt_spec_vision_to_none:
         if not training_args.freeze_vision:
-            logger.warn("Setting optimizer state spec for vision to None while it does not seem required")
+            logger.warn(
+                "Setting optimizer state spec for vision to None while it does not seem required"
+            )
 
     @partial(pjit, in_shardings=(params_spec,), out_shardings=opt_state_spec)
     def init_opt_state(params):
         if training_args.optim == "kron":
             return optimizer.init(trainable_params(params, training_args))
         opt_state = {}
-        for k, p in split_scanned_params(trainable_params(params, training_args)).items():
+        for k, p in split_scanned_params(
+            trainable_params(params, training_args)
+        ).items():
             init_fn = optimizer[k].init
             if "scanned" in k:
                 init_fn = jax.vmap(init_fn, in_axes=1 if "maxtext" in k else 0)
             opt_state[k] = init_fn(p)
         return opt_state
 
-
     @partial(pjit, in_shardings=(params_spec,))
     def init_opt_state_psgd(params):
         return optimizer.init(trainable_params(params, training_args))
-
 
     # Set opt_state
     with mesh:
@@ -1335,7 +1550,9 @@ def main():
             opt_state_spec = jax.tree.map(
                 lambda x: x.sharding,
                 opt_state,
-                is_leaf=lambda x: isinstance(x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)),
+                is_leaf=lambda x: isinstance(
+                    x, (jax.Array, nn.Partitioned, jax.ShapeDtypeStruct)
+                ),
             )
         else:
             opt_state = init_opt_state(params)
@@ -1413,10 +1630,14 @@ def main():
     def cross_entropy_loss(similarity):
         # increase precision for large batches
         similarity = similarity.astype(jnp.float64)
-        loss = (cross_entropy(similarity, axis=0) + cross_entropy(similarity, axis=1)) / 2
+        loss = (
+            cross_entropy(similarity, axis=0) + cross_entropy(similarity, axis=1)
+        ) / 2
         return loss
 
-    def mini_batch_sigmoid_loss(text_embeds, image_embeds, logit_scale, logit_bias, negative_samples):
+    def mini_batch_sigmoid_loss(
+        text_embeds, image_embeds, logit_scale, logit_bias, negative_samples
+    ):
         """Positive samples are on the diagonal"""
         bs = text_embeds.shape[0]
         if negative_samples:
@@ -1435,7 +1656,9 @@ def main():
         logit_bias = outputs["logit_bias"]
 
         # consider all samples in a batch
-        loss = mini_batch_sigmoid_loss(text_embeds, image_embeds, logit_scale, logit_bias, negative_samples=False)
+        loss = mini_batch_sigmoid_loss(
+            text_embeds, image_embeds, logit_scale, logit_bias, negative_samples=False
+        )
         return loss
 
     def chunked_sigmoid_loss(outputs):
@@ -1481,7 +1704,9 @@ def main():
                 )
                 return cumul_loss, image_embeds
 
-            loss, _ = jax.lax.fori_loop(0, axis_size - 1, add_negative_loss, (loss, image_embeds))
+            loss, _ = jax.lax.fori_loop(
+                0, axis_size - 1, add_negative_loss, (loss, image_embeds)
+            )
             loss = loss / axis_size
             loss = loss.reshape((-1,))
             return loss
@@ -1498,7 +1723,9 @@ def main():
         else:
             labels = minibatch.pop("labels", None)
             label_mask = minibatch.pop("label_mask", None)
-        outputs = model_fn.apply({"params": params}, rngs=rngs, deterministic=not train, **minibatch)
+        outputs = model_fn.apply(
+            {"params": params}, rngs=rngs, deterministic=not train, **minibatch
+        )
         with jax.profiler.TraceAnnotation("Compute_Loss"):
             if is_classification:
                 logits = outputs["logits"]
@@ -1532,14 +1759,18 @@ def main():
             jax.tree.map(_check_shape, batch)
             offset = grad_idx * training_args.batch_size_per_node
             length = training_args.batch_size_per_node
-            return jax.tree_util.tree_map(lambda x: jax.lax.dynamic_slice_in_dim(x, offset, length), batch)
+            return jax.tree_util.tree_map(
+                lambda x: jax.lax.dynamic_slice_in_dim(x, offset, length), batch
+            )
 
         train_compute_loss = partial(compute_loss, train=True)
         grad_fn = jax.value_and_grad(train_compute_loss)
 
         def loss_and_grad(grad_idx, dropout_rng):
             # minibatch at grad_idx for gradient accumulation (None otherwise)
-            minibatch = get_minibatch(batch, grad_idx) if grad_idx is not None else batch
+            minibatch = (
+                get_minibatch(batch, grad_idx) if grad_idx is not None else batch
+            )
             # ensure it is sharded properly
             minibatch = with_sharding_constraint(minibatch, data_spec)
             # only 1 single rng per grad step, let us handle larger batch size (not sure why)
@@ -1557,32 +1788,21 @@ def main():
             # create initial state for cumul_minibatch_step loop
             init_state = (
                 0.0,
-                with_sharding_constraint(jax.tree_util.tree_map(jnp.zeros_like, params), params_spec),
+                with_sharding_constraint(
+                    jax.tree_util.tree_map(jnp.zeros_like, params), params_spec
+                ),
                 rng,
             )
 
             # accumulate gradients
             def cumul_minibatch_step(grad_idx, cumul_state):
-                (
-                    cumul_loss,
-                    cumul_grads,
-                    rng,
-                ) = cumul_state
+                (cumul_loss, cumul_grads, rng) = cumul_state
                 loss, grads, rng = loss_and_grad(grad_idx, rng)
-                (
-                    cumul_loss,
-                    cumul_grads,
-                ) = jax.tree_util.tree_map(
-                    jnp.add,
-                    (cumul_loss, cumul_grads),
-                    (loss, grads),
+                (cumul_loss, cumul_grads) = jax.tree_util.tree_map(
+                    jnp.add, (cumul_loss, cumul_grads), (loss, grads)
                 )
                 cumul_grads = with_sharding_constraint(cumul_grads, params_spec)
-                return (
-                    cumul_loss,
-                    cumul_grads,
-                    rng,
-                )
+                return (cumul_loss, cumul_grads, rng)
 
             # loop over gradients
             loss, grads, rng = jax.lax.fori_loop(
@@ -1594,8 +1814,7 @@ def main():
             grads = with_sharding_constraint(grads, params_spec)
             # sum -> mean
             loss, grads = jax.tree_util.tree_map(
-                lambda x: x / training_args.gradient_accumulation_steps,
-                (loss, grads),
+                lambda x: x / training_args.gradient_accumulation_steps, (loss, grads)
             )
 
         # enforce sharding
@@ -1606,7 +1825,11 @@ def main():
 
         # get opt_state_step
         if training_args.optim == "distributed_shampoo":
-            opt_state_step = new_opt_state["text"][0] if "text" in new_opt_state else new_opt_state["vision"][0]
+            opt_state_step = (
+                new_opt_state["text"][0]
+                if "text" in new_opt_state
+                else new_opt_state["vision"][0]
+            )
         elif training_args.optim in ["adam", "adafactor"]:
             opt_state_step = new_opt_state["text"][2].count
         elif training_args.optim == "kron":
@@ -1650,25 +1873,23 @@ def main():
             params_norm = maybe_fn(norm, params, training_args.log_norm_steps)
 
             metrics.update(
-                {
-                    "gradients_norm": gradients_norm,
-                    "params_norm": params_norm,
-                }
+                {"gradients_norm": gradients_norm, "params_norm": params_norm}
             )
 
         if training_args.log_histogram_steps:
 
             def histogram(val):
-                return jax.tree_util.tree_map(lambda x: jnp.histogram(x, density=True), val)
+                return jax.tree_util.tree_map(
+                    lambda x: jnp.histogram(x, density=True), val
+                )
 
-            gradients_hist = maybe_fn(histogram, grads, training_args.log_histogram_steps)
+            gradients_hist = maybe_fn(
+                histogram, grads, training_args.log_histogram_steps
+            )
             params_hist = maybe_fn(histogram, params, training_args.log_histogram_steps)
 
             metrics.update(
-                {
-                    "params_hist": params_hist,
-                    "gradients_hist": gradients_hist,
-                }
+                {"params_hist": params_hist, "gradients_hist": gradients_hist}
             )
 
         return metrics, new_params, new_opt_state, opt_state_step
@@ -1679,11 +1900,7 @@ def main():
             if is_classification:
                 labels = batch["class_id"]
             loss = compute_loss(
-                params,
-                batch,
-                dropout_rng=None,
-                model_fn=model_eval,
-                train=False,
+                params, batch, dropout_rng=None, model_fn=model_eval, train=False
             )
             metrics = {}
             if is_classification:
@@ -1733,46 +1950,48 @@ def main():
         donate_argnums=(1, 2),
     )
     p_eval_step = pjit(
-        eval_step,
-        in_shardings=(params_spec, data_spec),
-        out_shardings=None,
+        eval_step, in_shardings=(params_spec, data_spec), out_shardings=None
     )
     p_predict_step = pjit(
-        predict_step,
-        in_shardings=(params_spec, data_spec),
-        out_shardings=None,
+        predict_step, in_shardings=(params_spec, data_spec), out_shardings=None
     )
 
     def run_evaluation(params, mesh):
         start_eval_time = time.perf_counter()
         metrics = []
-        for batch in tqdm(
-            dataset.valid,
-            desc="Evaluating...",
-            position=2,
-            leave=False,
-        ):
+        for batch in tqdm(dataset.valid, desc="Evaluating...", position=2, leave=False):
             # preprocess batch
             batch = preprocess_batch(
                 batch,
                 tokenizer,
                 max_length,
-                is_decoder=False if is_classification else model.text_config.get("is_decoder", True),
+                is_decoder=(
+                    False
+                    if is_classification
+                    else model.text_config.get("is_decoder", True)
+                ),
                 is_validation_batch=True,
             )
             # convert to jax arrays
             data_global_shape_eval = jax.tree.map(_get_global_shape, batch)
             # split per device
-            batch = jax.tree.map(lambda x: np.split(x, num_local_devices, axis=0), batch)
+            batch = jax.tree.map(
+                lambda x: np.split(x, num_local_devices, axis=0), batch
+            )
             # put data on device
             batch = jax.tree.map(
-                lambda x: [jax.device_put(arr, d) for arr, d in zip(x, local_addressable_devices)],
+                lambda x: [
+                    jax.device_put(arr, d)
+                    for arr, d in zip(x, local_addressable_devices)
+                ],
                 batch,
                 is_leaf=lambda x: isinstance(x, list),
             )
             # create global array
             batch = jax.tree.map(
-                lambda shape, data: jax.make_array_from_single_device_arrays(shape, data_global_sharding, data),
+                lambda shape, data: jax.make_array_from_single_device_arrays(
+                    shape, data_global_sharding, data
+                ),
                 data_global_shape_eval,
                 batch,
                 is_leaf=lambda x: isinstance(x, (list, tuple)),
@@ -1810,17 +2029,14 @@ def main():
 
         # shorten batches if possible
         n_predict_batch = (
-            training_args.n_predict if training_args.n_predict_batch is None else training_args.n_predict_batch
+            training_args.n_predict
+            if training_args.n_predict_batch is None
+            else training_args.n_predict_batch
         )
         max_batch = n_predict_batch // jax.process_count()
         max_batch = max(max_batch, num_local_devices)
 
-        for batch in tqdm(
-            dataset.valid,
-            desc="Predicting...",
-            position=2,
-            leave=False,
-        ):
+        for batch in tqdm(dataset.valid, desc="Predicting...", position=2, leave=False):
             # shorten batch if possible
             batch = jax.tree.map(lambda x: x[:max_batch], batch)
 
@@ -1829,23 +2045,34 @@ def main():
                 batch,
                 tokenizer_predict,
                 max_prefill_predict_length,
-                is_decoder=False if is_classification else model.text_config.get("is_decoder", True),
+                is_decoder=(
+                    False
+                    if is_classification
+                    else model.text_config.get("is_decoder", True)
+                ),
                 is_prediction_batch=True,
             )
 
             # convert to jax arrays
             data_global_shape_eval = jax.tree.map(_get_global_shape, batch)
             # split per device
-            batch = jax.tree.map(lambda x: np.split(x, num_local_devices, axis=0), batch)
+            batch = jax.tree.map(
+                lambda x: np.split(x, num_local_devices, axis=0), batch
+            )
             # put data on device
             batch = jax.tree.map(
-                lambda x: [jax.device_put(arr, d) for arr, d in zip(x, local_addressable_devices)],
+                lambda x: [
+                    jax.device_put(arr, d)
+                    for arr, d in zip(x, local_addressable_devices)
+                ],
                 batch,
                 is_leaf=lambda x: isinstance(x, list),
             )
             # create global array
             batch = jax.tree.map(
-                lambda shape, data: jax.make_array_from_single_device_arrays(shape, data_global_sharding, data),
+                lambda shape, data: jax.make_array_from_single_device_arrays(
+                    shape, data_global_sharding, data
+                ),
                 data_global_shape_eval,
                 batch,
                 is_leaf=lambda x: isinstance(x, (list, tuple)),
@@ -1861,7 +2088,9 @@ def main():
                 n_needed = training_args.n_predict - len(predictions)
                 predictions_batch = predictions_batch[:n_needed]
                 predictions_batch = jax.device_get(predictions_batch)
-                preds = tokenizer.batch_decode(predictions_batch, skip_special_tokens=True)
+                preds = tokenizer.batch_decode(
+                    predictions_batch, skip_special_tokens=True
+                )
                 preds = [c.strip() for c in preds]
                 pixel_values = batch["pixel_values"][:n_needed]
                 images = jax.device_get(pixel_values)
@@ -1897,9 +2126,13 @@ def main():
                 max_to_keep=training_args.checkpoints_to_keep,
                 enable_async_checkpointing=False,
             )
-            save_checkpoint_manager = orbax.checkpoint.CheckpointManager(dir, orbax_checkpointer, orbax_options)
+            save_checkpoint_manager = orbax.checkpoint.CheckpointManager(
+                dir, orbax_checkpointer, orbax_options
+            )
             save_args = orbax_utils.save_args_from_target(ckpt)
-            save_checkpoint_manager.save(step, ckpt, save_kwargs={"save_args": save_args})
+            save_checkpoint_manager.save(
+                step, ckpt, save_kwargs={"save_args": save_args}
+            )
 
         start_save_time = time.perf_counter()
 
@@ -1971,10 +2204,7 @@ def main():
                 sample = next(iter(dataset.train))
                 batch_iterator = itertools.repeat(sample)
             for batch in tqdm(
-                batch_iterator,
-                desc="Training...",
-                position=1,
-                leave=False,
+                batch_iterator, desc="Training...", position=1, leave=False
             ):
                 # reset control variables
                 evaluation_ran, save_model_ran, metrics_logged = False, False, False
@@ -1984,7 +2214,11 @@ def main():
                     batch,
                     tokenizer,
                     max_length,
-                    is_decoder=False if is_classification else model.text_config.get("is_decoder", True),
+                    is_decoder=(
+                        False
+                        if is_classification
+                        else model.text_config.get("is_decoder", True)
+                    ),
                 )
 
                 # reshape batch
@@ -1992,18 +2226,25 @@ def main():
                     data_global_shape = jax.tree.map(_get_global_shape, batch)
 
                 # split per device
-                batch = jax.tree.map(lambda x: np.split(x, num_local_devices, axis=0), batch)
+                batch = jax.tree.map(
+                    lambda x: np.split(x, num_local_devices, axis=0), batch
+                )
 
                 # put data on device
                 batch = jax.tree.map(
-                    lambda x: [jax.device_put(arr, d) for arr, d in zip(x, local_addressable_devices)],
+                    lambda x: [
+                        jax.device_put(arr, d)
+                        for arr, d in zip(x, local_addressable_devices)
+                    ],
                     batch,
                     is_leaf=lambda x: isinstance(x, list),
                 )
 
                 # create global array
                 batch = jax.tree.map(
-                    lambda shape, data: jax.make_array_from_single_device_arrays(shape, data_global_sharding, data),
+                    lambda shape, data: jax.make_array_from_single_device_arrays(
+                        shape, data_global_sharding, data
+                    ),
                     data_global_shape,
                     batch,
                     is_leaf=lambda x: isinstance(x, (list, tuple)),
@@ -2034,7 +2275,9 @@ def main():
 
                 # log metrics
                 if step % training_args.logging_steps == 0:
-                    state.update(step=step, samples=samples, opt_state_step=opt_state_step)
+                    state.update(
+                        step=step, samples=samples, opt_state_step=opt_state_step
+                    )
                     if jax.process_index() == 0:
                         state.log(metrics)
                     metrics_logged = True
@@ -2042,18 +2285,24 @@ def main():
 
                 # evaluation
                 if training_args.do_eval and step % training_args.eval_steps == 0:
-                    state.update(step=step, samples=samples, opt_state_step=opt_state_step)
+                    state.update(
+                        step=step, samples=samples, opt_state_step=opt_state_step
+                    )
                     run_evaluation(params, mesh)
                     evaluation_ran = True
 
                 # save model
                 if step % training_args.save_steps == 0:
-                    state.update(step=step, samples=samples, opt_state_step=opt_state_step)
+                    state.update(
+                        step=step, samples=samples, opt_state_step=opt_state_step
+                    )
                     run_save_model(params, opt_state)
                     save_model_ran = True
 
                 # end test
-                if training_args.do_test_steps and (step - step_start >= training_args.do_test_steps):
+                if training_args.do_test_steps and (
+                    step - step_start >= training_args.do_test_steps
+                ):
                     # terminate script
                     print("Test successful")
                     return
