@@ -45,7 +45,6 @@ def main(
         weight_decay=0.01,
         weight_decay_mask=None,
         normalize_grads=True,
-        preconditioner_update_probability=1.0,
         max_size_triangular=8192,
         min_ndim_triangular=2,
         memory_save_mode=None,
