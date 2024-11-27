@@ -70,8 +70,9 @@ def scale_by_kron(
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
 
     Args:
-        b1: float, momentum parameter.
-        normalize_grads: bool, whether to normalize the incoming gradients.
+        b1: float, momentum parameter. 0.9 or 0.95 are common values.
+        normalize_grads: bool, whether to normalize the incoming gradients to unit
+            norm layer-wise. Can help with stability.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
@@ -81,9 +82,10 @@ def scale_by_kron(
             to set all preconditioners to be triangular, 'one_diag' sets the largest
             or last dim to be diagonal per layer, and 'all_diag' sets all preconditioners
             to be diagonal.
-        mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
-            Defaults to the same dtype as the parameters.
-        precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
+        mu_dtype: optional str or jnp.dtype, dtype of the momentum buffer. Defaults to
+            same dtype as the parameters.
+        precond_dtype: optional str or jnp.dtype, dtype of the preconditioners. Defaults
+            to 'float32'.
         precond_update_precision: str, precision for matmul during preconditioner update,
              'bfloat16', 'tensorfloat32', 'float32'.
         precond_grads_precision: str, precision for matmul during preconditioning grads,
@@ -94,17 +96,22 @@ def scale_by_kron(
         lax_map_scanned_layers: bool, whether to use lax.map for scanned layers
             instead of vmap. Useful to save memory with large models.
         lax_map_batch_size: int, batch size for lax.map, see JAX docs for more info.
-        merge_small_dims: bool, whether to merge dimensions of tensors with
-            more than 2 dimensions to improve compile times and preconditioner
-            efficacy.
-        target_merged_dim_size: int, target product of merged dimensions.
+        merge_small_dims: bool, whether to merge small dimensions to improve
+            preconditioner efficiency.
+        target_merged_dim_size: int, target size of merged dimensions.
         partition_grads_into_blocks: bool, whether to partition grads into chunks of
-            size `block_size` for memory efficiency.
-        block_size: int, size of partitions to use for memory efficiency.
-        buffer_qq: bool, whether to buffer p=q@q.
-        params_sharding: pytree same structure as params of PartitionSpec.
-        preconditioner_sharding: partition spec for preconditioner matrices
-            PartitionSpec(str | None, str | None).
+            size `block_size` for efficiency.
+        block_size: int, block size to use for partitioning grads.
+        buffer_qq: bool, whether to buffer p=q@q.T for faster preconditioning. This may
+            not be beneficial if using sharded preconditioners so default is False. If
+            not sharding preconditioners, try setting to True to see if there is a speedup.
+        params_sharding: pytree same structure as params of jax.sharding.PartitionSpec.
+        preconditioner_sharding: `None` or `PartitionSpec(str | None, str | None)`,
+            PartitionSpec for preconditioner matrices. `None` infers a strategy
+            from params_sharding that matches first preconditioner axis to
+            corresponding axis in params. Best practice, though, is to shard the first
+            dimension across fsdp-like mesh axis, or the largest, most common axis in
+            params. For example, PartitionSpec('fsdp') or PartitionSpec('fsdp', 'tp').
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -125,7 +132,7 @@ def scale_by_kron(
             and jax.process_index() == 0
         ):
             print(
-                "PSGD Kron WARNING: buffering Q@Q with sharding but Mesh is empty. "
+                "PSGD Kron WARNING: buffering Q@Q.T with sharding but Mesh is empty. "
                 "Consider running Kron within a mesh context manager `with mesh:` or "
                 "setting buffer_qq=False to prevent potential sharding inefficiencies. "
                 "If only using replicated sharding, you can ignore this warning."
@@ -239,6 +246,9 @@ def scale_by_kron(
                 jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)
             ]
 
+        print("Merged shapes:")
+        print(merged_shapes)
+
         # partition grads into blocks
         partitioned_shapes = merged_shapes
         if partition_grads_into_blocks:
@@ -252,6 +262,9 @@ def scale_by_kron(
             partitioned_shapes = jax.tree.map(
                 lambda _, p_cls: p_cls._padded_stacked_shape, params, partitioners
             )
+
+        print("Partitioned shapes:")
+        print(partitioned_shapes)
 
         # initialize preconditioners
         output = jax.tree.map(
@@ -319,6 +332,9 @@ def scale_by_kron(
             )
             if have_qs_sharding:
                 Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+
+            print("Qs shapes:")
+            print(jax.tree.map(lambda x: x.shape, Qs))
 
             # Calculate and print sizes for preconditioners and momentum
             Qs_n_elements = sum([q.size for q in jax.tree.leaves(Qs)])
@@ -498,6 +514,9 @@ def scale_by_kron(
                     momentum_updates, merged_params_sharding
                 )
 
+        print("Merged updates shapes:")
+        print(jax.tree.map(lambda x: x.shape, momentum_updates))
+
         # partition grads into blocks
         partitioned_sharding = merged_params_sharding
         n_dims_to_map = jax.tree.map(lambda s: int(s), scanned_layers_)
@@ -523,16 +542,16 @@ def scale_by_kron(
                 momentum_updates,
                 scanned_layers_,
             )
-            # if have_params_sharding:
-            #     # constrain partitions to same sharding as entire layer
-            #     momentum_updates = jax.tree.map(
-            #         lambda _, g, mps: jax.tree.map(
-            #             lambda x: _safe_sharding_constraint(x, mps), g
-            #         ),
-            #         dummy_updates_tree,
-            #         momentum_updates,
-            #         merged_params_sharding,
-            #     )
+            if have_params_sharding:
+                # constrain partitions to same sharding as entire layer
+                momentum_updates = jax.tree.map(
+                    lambda _, g, mps: jax.tree.map(
+                        lambda x: _safe_sharding_constraint(x, mps), g
+                    ),
+                    dummy_updates_tree,
+                    momentum_updates,
+                    merged_params_sharding,
+                )
             # pad and stack partitions, tuples become arrays with new leading dim
             momentum_updates = jax.tree.map(
                 lambda _, g, s: _map_fn(
@@ -558,6 +577,9 @@ def scale_by_kron(
                     momentum_updates, partitioned_sharding
                 )
             n_dims_to_map = jax.tree.map(lambda x: x + 1, n_dims_to_map)
+
+        print("Partitioned updates shapes:")
+        print(jax.tree.map(lambda x: x.shape, momentum_updates))
 
         # get einsum expressions and Qs sharding
         Qs = state["Qs_preconditioners"]
@@ -754,6 +776,9 @@ def scale_by_kron(
         if have_qs_sharding:
             new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
 
+        print("New Qs shapes:")
+        print(jax.tree.map(lambda x: x.shape, new_Qs))
+
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
             # precondition with stale Qs
@@ -808,6 +833,9 @@ def scale_by_kron(
             if have_params_sharding:
                 precond_gs = _safe_sharding_constraint(precond_gs, partitioned_sharding)
 
+        print("Preconditioned grads shapes:")
+        print(jax.tree.map(lambda x: x.shape, precond_gs))
+
         # unpartition grads
         if partition_grads_into_blocks:
             precond_gs = jax.tree.map(
@@ -822,10 +850,10 @@ def scale_by_kron(
                 scanned_layers_,
                 partitioned_shapes,
             )
-            # if have_params_sharding:
-            #     precond_gs = _safe_sharding_constraint(
-            #         precond_gs, merged_params_sharding
-            #     )
+            if have_params_sharding:
+                precond_gs = _safe_sharding_constraint(
+                    precond_gs, merged_params_sharding
+                )
             precond_gs = jax.tree.map(
                 lambda _, g, s, p_cls: _map_fn(
                     False, 0, int(s), p_cls.merge_partitions, g
@@ -840,6 +868,9 @@ def scale_by_kron(
                     precond_gs, merged_params_sharding
                 )
 
+        print("Unpartitioned grads shapes:")
+        print(jax.tree.map(lambda x: x.shape, precond_gs))
+
         # un-merge dimensions
         if merge_small_dims:
             precond_gs = jax.tree.map(
@@ -852,6 +883,9 @@ def scale_by_kron(
             )
             if have_params_sharding:
                 precond_gs = _safe_sharding_constraint(precond_gs, params_sharding_)
+
+        print("Unmerged grads shapes:")
+        print(jax.tree.map(lambda x: x.shape, precond_gs))
 
         # return scalars to original shape
         precond_gs = jax.tree.map(
@@ -912,45 +946,53 @@ def kron(
     Implements PSGD Kron from https://github.com/lixilinx/psgd_torch.
 
     Args:
-        learning_rate: float or callable, learning rate.
-        b1: float, momentum parameter.
-        weight_decay: float, weight decay.
-        weight_decay_mask: optional Any or callable, pytree of bool same structure
-            as params with weight decay applied to True elements.
-        normalize_grads: bool, whether to normalize the incoming gradients.
+        learning_rate: float or callable, learning rate schedule.
+        b1: float, momentum parameter. 0.9 or 0.95 are common values.
+        weight_decay: float, weight decay coefficient.
+        weight_decay_mask: optional pytree same structure as params, or callable
+            returning a pytree, that masks weight decay. Weight decay is applied to
+            leaves that are True.
+        normalize_grads: bool, whether to normalize the incoming gradients to unit
+            norm layer-wise. Can help with stability.
         preconditioner_update_probability: float, probability of updating the
             preconditioner. Default anneals from 1.0 to 0.03 by 4000 steps.
         max_size_triangular: int, max size for dim's preconditioner to be triangular.
         min_ndim_triangular: int, minimum number of dimensions a layer needs to have
             triangular preconditioners.
         memory_save_mode: optional str, None, 'one_diag', or 'all_diag', None is default
-            to set all preconditioners to be triangular. 'one_diag' sets only the largest
-            or last dim in a layer to be diagonal, and 'all_diag' sets all preconditioners
+            to set all preconditioners to be triangular, 'one_diag' sets the largest
+            or last dim to be diagonal per layer, and 'all_diag' sets all preconditioners
             to be diagonal.
-        mu_dtype: optional str or jnp.dtype, dtype of the momentum accumulator.
-            Defaults to the same dtype as the parameters.
-        precond_dtype: optional str or jnp.dtype, dtype of the preconditioner.
+        mu_dtype: optional str or jnp.dtype, dtype of the momentum buffer. Defaults to
+            same dtype as the parameters.
+        precond_dtype: optional str or jnp.dtype, dtype of the preconditioners. Defaults
+            to 'float32'.
         precond_update_precision: str, precision for matmul during preconditioner update,
-            'bfloat16', 'tensorfloat32', 'float32'.
+             'bfloat16', 'tensorfloat32', 'float32'.
         precond_grads_precision: str, precision for matmul during preconditioning grads,
-            'bfloat16', 'tensorfloat32', 'float32'.
+             'bfloat16', 'tensorfloat32', 'float32'.
         scanned_layers: optional base.Params, tree of booleans same structure as
             params indicating scanned dimensions for each layer. PSGD will vmap over
             leading dimension.
         lax_map_scanned_layers: bool, whether to use lax.map for scanned layers
             instead of vmap. Useful to save memory with large models.
         lax_map_batch_size: int, batch size for lax.map, see JAX docs for more info.
-        merge_small_dims: bool, whether to merge dimensions of tensors with
-            more than 2 dimensions to improve compile times and preconditioner
-            efficacy.
-        target_merged_dim_size: int, target product of merged dimensions.
+        merge_small_dims: bool, whether to merge small dimensions to improve
+            preconditioner efficiency.
+        target_merged_dim_size: int, target size of merged dimensions.
         partition_grads_into_blocks: bool, whether to partition grads into chunks of
-            size `block_size` for memory efficiency.
-        block_size: int, size of partitions to use for memory efficiency.
-        buffer_qq: bool, whether to buffer p=q@q for faster preconditioning.
-        params_sharding: pytree same structure as params of PartitionSpec.
-        preconditioner_sharding: partition spec for preconditioner matrices
-            PartitionSpec(str | None, str | None).
+            size `block_size` for efficiency.
+        block_size: int, block size to use for partitioning grads.
+        buffer_qq: bool, whether to buffer p=q@q.T for faster preconditioning. This may
+            not be beneficial if using sharded preconditioners so default is False. If
+            not sharding preconditioners, try setting to True to see if there is a speedup.
+        params_sharding: pytree same structure as params of jax.sharding.PartitionSpec.
+        preconditioner_sharding: `None` or `PartitionSpec(str | None, str | None)`,
+            PartitionSpec for preconditioner matrices. `None` infers a strategy
+            from params_sharding that matches first preconditioner axis to
+            corresponding axis in params. Best practice, though, is to shard the first
+            dimension across fsdp-like mesh axis, or the largest, most common axis in
+            params. For example, PartitionSpec('fsdp') or PartitionSpec('fsdp', 'tp').
 
     Returns:
         optax.GradientTransformationExtraArgs
@@ -997,11 +1039,13 @@ def get_opt_state_partition_specs(
         kwargs: kwargs for kron (or scale_by_kron).
 
     Returns:
-        opt_state PartitionSpecs tree.
+        tree of PartitionSpecs for optimizer state.
     """
     params_flat, params_struct = jax.tree.flatten(params)
     if isinstance(params_flat[0], nn.Partitioned):
         params_flat = [p.unbox(p) for p in params_flat]
+    if not isinstance(params_flat[0], jax.ShapeDtypeStruct):
+        params_flat = [jax.ShapeDtypeStruct(p.shape, p.dtype) for p in params_flat]
     params = params_struct.unflatten(params_flat)
 
     specs = scale_by_kron(**kwargs).init(params, return_partition_specs_only=True)
@@ -1053,20 +1097,6 @@ def _init_Q_exprs(
     buffer_qq=False,
     current_mesh: Optional[jax.sharding.Mesh] = None,
 ):
-    """For a scalar or tensor `t`, we initialize its preconditioner `Q` and
-    reusable contraction expressions for updating `Q` and preconditioning gradient.
-
-    Args:
-        t: Input tensor or scalar
-        scale: Scale factor for initialization
-        dim_diag: Diagonal flags for each dimension.
-        dtype: Data type for preconditioners
-        existing_Q: Optional existing preconditioners to reuse
-        precond_sharding: Optional sharding spec for preconditioners
-        param_sharding: Optional sharding spec for input tensor
-        buffer_qq: bool, whether to buffer p=q@q
-        current_mesh: Optional Mesh, current device mesh
-    """
     have_qs_sharding = precond_sharding is not None or param_sharding is not None
     letters = string.ascii_lowercase + string.ascii_uppercase
     if len(t_shape) == 0:  # scalar
@@ -1431,13 +1461,8 @@ class BlockPartitioner:
         padded_single_shape = [
             -(-dim // block_size) * block_size for dim in single_shape
         ]
-        stack_size = np.prod([max(1, len(s)) for s in split_sizes])
+        stack_size = max(1, np.prod([max(1, len(s)) for s in split_sizes]))
         self._padded_stacked_shape = tuple([stack_size] + padded_single_shape)
-
-        print(f"param shape: {param_shape}")
-        print(f"splits: {self._splits}")
-        print(f"split sizes: {self._split_sizes}")
-        print(f"padded stacked shape: {self._padded_stacked_shape}")
 
     def split_sizes(self):
         return self._split_sizes
@@ -1484,17 +1509,6 @@ def _partitions(lst):
 def _merge_small_dims(
     shape_to_merge, max_dim, dim_diag, sharding_to_merge=None
 ) -> Tuple[List[int], List[bool], Optional[Tuple]]:
-    """Merge small dimensions and their corresponding sharding specs and diag flags.
-
-    Args:
-        shape_to_merge: Shape to merge small dimensions.
-        max_dim: Target dimension size for merged dimensions.
-        dim_diag: Diagonal flags for each dimension.
-        sharding_to_merge: Optional partition spec to merge alongside shape.
-
-    Returns:
-        Tuple of (merged shape, merged diag flags, merged sharding).
-    """
     if not shape_to_merge:  # handles scalar shape ()
         return [], [True], PartitionSpec() if sharding_to_merge is not None else None
     if np.all(np.array(shape_to_merge) == 1):  # handles shape (1,)
@@ -1639,59 +1653,3 @@ def _unstack_matrices(stacked_arrays, revert_indices):
     if in_tuple:
         return tuple(array_list)
     return array_list
-
-
-def _test_block_partitioner():
-    """Test BlockPartitioner with various shapes."""
-    test_cases = [
-        # (shape, block_size, dim_diag)
-        ((16, 16), 8, [False, False]),
-        ((32, 16), 8, [False, False]),
-        ((64, 32, 15), 16, [False, False, False]),
-        ((128,), 32, [False]),
-        ((256, 100), 64, [False, True]),
-        ((1024, 512), 256, [False, False]),
-    ]
-
-    for shape, block_size, dim_diag in test_cases:
-        print(f"\nTesting shape {shape} with block_size {block_size}")
-
-        # Create test tensor
-        test_tensor = jnp.ones(shape)
-
-        # Initialize partitioner
-        partitioner = BlockPartitioner(shape, block_size, dim_diag)
-
-        # Test partition and merge
-        partitioned = partitioner.partition(test_tensor)
-        merged = partitioner.merge_partitions(partitioned)
-
-        # Test padding and stacking
-        padded_stacked = _pad_and_stack_matrices(partitioned, block_size)
-        unstacked_unpadded = _unstack_and_unpad_matrices(
-            padded_stacked, [p.shape for p in partitioned]
-        )
-
-        # Verify results
-        print(f"Number of partitions: {len(partitioned)}")
-        print(f"Partition shapes: {[p.shape for p in partitioned]}")
-        print(f"Padded and stacked shape: {padded_stacked.shape}")
-        print(f"Original shape: {test_tensor.shape}")
-        print(f"Merged shape: {merged.shape}")
-
-        # Check if shapes match
-        assert (
-            merged.shape == test_tensor.shape
-        ), f"Shape mismatch: {merged.shape} != {test_tensor.shape}"
-        # Check if values are preserved after partition and merge
-        assert jnp.allclose(
-            merged, test_tensor
-        ), "Values not preserved after partition and merge"
-        # Check if values are preserved after padding/stacking/unstacking/unpadding
-        assert all(
-            jnp.allclose(p1, p2) for p1, p2 in zip(partitioned, unstacked_unpadded)
-        ), "Values not preserved after padding/stacking operations"
-
-
-if __name__ == "__main__":
-    _test_block_partitioner()
