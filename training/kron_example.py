@@ -25,13 +25,13 @@ def main():
     mesh = Mesh(devices, ("fsdp", "pipeline"))
 
     params_sharding = {
-        "w1": NS(mesh, P("pipeline", None, "fsdp")),
+        "w1": NS(mesh, P("pipeline", None, "fsdp")),  # kron maintains pipeline sharding
         "w2": NS(mesh, P("fsdp", None, None)),
         "b1": NS(mesh, P(None)),
     }
 
     # some inputs for kron
-    params_sharding_in = jax.tree.map(lambda x: x.spec, params_sharding)  # only specs
+    params_sharding_in = jax.tree.map(lambda x: x.spec, params_sharding)  # only specs, not sharding
     scanned_layers = {"w1": True, "w2": False, "b1": False}  # which layers in model are scanned
     preconditioner_sharding = P("fsdp", None)  # explicitly set sharding for preconditioners
 
@@ -52,10 +52,10 @@ def main():
         scanned_layers=scanned_layers,
         lax_map_scanned_layers=False,
         lax_map_batch_size=8,
-        merge_small_dims=False,
+        merge_small_dims=True,
         target_merged_dim_size=2048,
         partition_grads_into_blocks=True,
-        block_size=128,
+        block_size=256,
         buffer_qq=False,  # likely not useful in distributed setting
         params_sharding=params_sharding_in,
         preconditioner_sharding=preconditioner_sharding,
@@ -64,7 +64,7 @@ def main():
     optimizer = kron(**opt_kwargs)
 
     def init_train_state():
-        params = {"w1": jnp.ones((2, 512, 2048)), "w2": jnp.ones((2048, 500, 2)), "b1": jnp.ones(2048)}
+        params = {"w1": jnp.ones((2, 1024, 4096)), "w2": jnp.ones((4096, 1000, 2)), "b1": jnp.ones(4096)}
         opt_state = optimizer.init(params)
         return {"params": params, "opt_state": opt_state}
 
@@ -78,7 +78,7 @@ def main():
     @partial(
         jax.jit,
         in_shardings=(params_sharding, train_state_sharding),
-        # can comment out because internal optimizer sharding constraints should hold
+        # can comment out because optimizer's internal sharding constraints should hold
         # out_shardings=(params_sharding, train_state_sharding),
     )
     def test_step(grads, train_state):
@@ -87,14 +87,6 @@ def main():
         updates, new_state = optimizer.update(grads, opt_state, params)
         params = optax.apply_updates(params, updates)
         return updates, {"params": params, "opt_state": new_state}
-
-    grads = jax.tree.map(jnp.ones_like, train_state_shapes["params"])
-    grads = jax.device_put(grads, device=params_sharding)
-
-    with mesh:
-        out_shapes = jax.eval_shape(test_step, grads, train_state_shapes)
-    print("Output shapes:")
-    pprint_tree(out_shapes)
 
     with mesh:
         train_state = init_train_state_jitted()

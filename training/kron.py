@@ -246,9 +246,6 @@ def scale_by_kron(
                 jax.tree.map(lambda _, x: x[i], params, output) for i in range(3)
             ]
 
-        print("Merged shapes:")
-        print(merged_shapes)
-
         # partition grads into blocks
         partitioned_shapes = merged_shapes
         if partition_grads_into_blocks:
@@ -262,9 +259,6 @@ def scale_by_kron(
             partitioned_shapes = jax.tree.map(
                 lambda _, p_cls: p_cls._padded_stacked_shape, params, partitioners
             )
-
-        print("Partitioned shapes:")
-        print(partitioned_shapes)
 
         # initialize preconditioners
         output = jax.tree.map(
@@ -332,9 +326,6 @@ def scale_by_kron(
             )
             if have_qs_sharding:
                 Qs = _safe_sharding_constraint(Qs, Qs_sharding)
-
-            print("Qs shapes:")
-            print(jax.tree.map(lambda x: x.shape, Qs))
 
             # Calculate and print sizes for preconditioners and momentum
             Qs_n_elements = sum([q.size for q in jax.tree.leaves(Qs)])
@@ -514,9 +505,6 @@ def scale_by_kron(
                     momentum_updates, merged_params_sharding
                 )
 
-        print("Merged updates shapes:")
-        print(jax.tree.map(lambda x: x.shape, momentum_updates))
-
         # partition grads into blocks
         partitioned_sharding = merged_params_sharding
         n_dims_to_map = jax.tree.map(lambda s: int(s), scanned_layers_)
@@ -577,9 +565,6 @@ def scale_by_kron(
                     momentum_updates, partitioned_sharding
                 )
             n_dims_to_map = jax.tree.map(lambda x: x + 1, n_dims_to_map)
-
-        print("Partitioned updates shapes:")
-        print(jax.tree.map(lambda x: x.shape, momentum_updates))
 
         # get einsum expressions and Qs sharding
         Qs = state["Qs_preconditioners"]
@@ -776,9 +761,6 @@ def scale_by_kron(
         if have_qs_sharding:
             new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
 
-        print("New Qs shapes:")
-        print(jax.tree.map(lambda x: x.shape, new_Qs))
-
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
             # precondition with stale Qs
@@ -833,9 +815,6 @@ def scale_by_kron(
             if have_params_sharding:
                 precond_gs = _safe_sharding_constraint(precond_gs, partitioned_sharding)
 
-        print("Preconditioned grads shapes:")
-        print(jax.tree.map(lambda x: x.shape, precond_gs))
-
         # unpartition grads
         if partition_grads_into_blocks:
             precond_gs = jax.tree.map(
@@ -868,9 +847,6 @@ def scale_by_kron(
                     precond_gs, merged_params_sharding
                 )
 
-        print("Unpartitioned grads shapes:")
-        print(jax.tree.map(lambda x: x.shape, precond_gs))
-
         # un-merge dimensions
         if merge_small_dims:
             precond_gs = jax.tree.map(
@@ -883,9 +859,6 @@ def scale_by_kron(
             )
             if have_params_sharding:
                 precond_gs = _safe_sharding_constraint(precond_gs, params_sharding_)
-
-        print("Unmerged grads shapes:")
-        print(jax.tree.map(lambda x: x.shape, precond_gs))
 
         # return scalars to original shape
         precond_gs = jax.tree.map(
@@ -1032,8 +1005,10 @@ def get_opt_state_partition_specs(
 ):
     """Get tree of PartitionSpecs for kron optimizer state.
 
+    params converted to jax.ShapeDtypeStructs, no arrays are used.
+
     Args:
-        params: pytree of params
+        params: pytree of Arrays, nn.Partitioned, or jax.ShapeDtypeStruct.
         scale_by_kron_only: bool, If True, only returns partition specs for the
             `scale_by_kron` function, otherwise the `kron` function.
         kwargs: kwargs for kron (or scale_by_kron).
