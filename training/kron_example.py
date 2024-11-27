@@ -1,4 +1,5 @@
 import os
+from time import time
 from functools import partial
 from pprint import pprint
 
@@ -20,7 +21,10 @@ def pprint_tree(tree, shardings=False):
     ), width=120, sort_dicts=False)
 
 
-def main():
+def main(
+    merge_small_dims: bool = True,
+    partition_grads_into_blocks: bool = True,
+):
     devices = create_device_mesh((2, 2))
     mesh = Mesh(devices, ("fsdp", "pipeline"))
 
@@ -52,9 +56,9 @@ def main():
         scanned_layers=scanned_layers,
         lax_map_scanned_layers=False,
         lax_map_batch_size=8,
-        merge_small_dims=True,
+        merge_small_dims=merge_small_dims,
         target_merged_dim_size=2048,
-        partition_grads_into_blocks=True,
+        partition_grads_into_blocks=partition_grads_into_blocks,
         block_size=256,
         buffer_qq=False,  # likely not useful in distributed setting
         params_sharding=params_sharding_in,
@@ -94,12 +98,13 @@ def main():
         pprint_tree(train_state)
 
         grads = jax.tree.map(jnp.ones_like, train_state["params"])
-        grads = jax.device_put(grads, device=params_sharding)
+        grads = jax.block_until_ready(jax.device_put(grads, device=params_sharding))
 
+        start = time()
         updates, new_state = jax.block_until_ready(test_step(grads, train_state))
+        end = time()
+        print(f"TIME taken: {end - start} seconds")
 
-        print("Output train state shapes:")
-        pprint_tree(new_state)
         print("Output updates sharding:")
         pprint_tree(updates, shardings=True)
         print("Output train state sharding:")
@@ -107,4 +112,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main(merge_small_dims=False, partition_grads_into_blocks=False)
+    main(merge_small_dims=True, partition_grads_into_blocks=False)
+    main(merge_small_dims=False, partition_grads_into_blocks=True)
+    main(merge_small_dims=True, partition_grads_into_blocks=True)
