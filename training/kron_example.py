@@ -11,7 +11,7 @@ import optax
 from kron import kron, get_opt_state_partition_specs
 
 
-os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=8"
+os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
 
 
 def pprint_tree(tree, shardings=False):
@@ -21,7 +21,7 @@ def pprint_tree(tree, shardings=False):
 
 
 def main():
-    devices = create_device_mesh((4, 2))
+    devices = create_device_mesh((2, 2))
     mesh = Mesh(devices, ("fsdp", "pipeline"))
 
     params_sharding = {
@@ -40,7 +40,7 @@ def main():
         b1=0.9,
         weight_decay=0.01,
         weight_decay_mask=None,
-        normalize_grads=False,
+        normalize_grads=True,
         preconditioner_update_probability=1.0,
         max_size_triangular=8192,
         min_ndim_triangular=2,
@@ -88,6 +88,14 @@ def main():
         params = optax.apply_updates(params, updates)
         return updates, {"params": params, "opt_state": new_state}
 
+    grads = jax.tree.map(jnp.ones_like, train_state_shapes["params"])
+    grads = jax.device_put(grads, device=params_sharding)
+
+    with mesh:
+        out_shapes = jax.eval_shape(test_step, grads, train_state_shapes)
+    print("Output shapes:")
+    pprint_tree(out_shapes)
+
     with mesh:
         train_state = init_train_state_jitted()
         print("Input train state shapes:")
@@ -108,4 +116,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
