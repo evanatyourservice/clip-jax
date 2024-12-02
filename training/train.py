@@ -196,6 +196,12 @@ class TrainingArguments:
     kron_merge_small_dims: bool = field(
         default=False, metadata={"help": "Merge small dimensions for Kron."}
     )
+    kron_partition_grads_into_blocks: bool = field(
+        default=False, metadata={"help": "Partition grads into blocks for Kron."}
+    )
+    kron_block_size: int = field(
+        default=256, metadata={"help": "Block size for Kron."}
+    )
     caspr_variant: bool = field(
         default=False, metadata={"help": "Use CASPR variant of Distributed Shampoo."}
     )
@@ -1367,8 +1373,8 @@ def main():
                 ),
                 merge_small_dims=training_args.kron_merge_small_dims,
                 target_merged_dim_size=4096,
-                partition_grads_into_blocks=True,
-                block_size=256,
+                partition_grads_into_blocks=training_args.kron_partition_grads_into_blocks,
+                block_size=training_args.kron_block_size,
                 buffer_qq=False,
                 params_sharding=params_spec,
                 preconditioner_sharding=PartitionSpec(None, None),
