@@ -1362,13 +1362,6 @@ def _add_tiny(x):
     return x + jnp.finfo(x.dtype).tiny
 
 
-def _first_n_dims(x, n):
-    if n <= 0:
-        return x
-    indices = (0,) * n
-    return x[indices + (slice(None),) * (x.ndim - n)]
-
-
 def _map_fn(lax_map, bs, n_maps, fn, *args):
     """Maybe map a fn along multiple leading axes."""
     if n_maps <= 0:

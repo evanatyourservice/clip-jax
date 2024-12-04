@@ -1359,7 +1359,6 @@ def main():
         # psgd kron handles scanned layers internally so we pass in a tree of booleans
         # indicating which layers to scan
         _opt = [
-            # optax.clip_by_global_norm(1.0),
             scale_by_kron(
                 b1=training_args.beta1,
                 normalize_grads=True,
@@ -1375,7 +1374,7 @@ def main():
                 target_merged_dim_size=4096,
                 partition_grads_into_blocks=training_args.kron_partition_grads_into_blocks,
                 block_size=training_args.kron_block_size,
-                buffer_qq=False,
+                buffer_qq=True,
                 params_sharding=params_spec,
                 preconditioner_sharding=PartitionSpec(None, None),
             )
