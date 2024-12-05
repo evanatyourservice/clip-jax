@@ -619,9 +619,9 @@ def scale_by_kron(
 
                 # damp based on machine precision
                 grads_in = otu.tree_cast(momentum_updates, precond_dtype)
-                damp_eps = jnp.sqrt(jnp.finfo(jnp.float32).eps)
+                damp_eps = jnp.sqrt(jnp.finfo(jnp.float32).eps)  # bf16 eps too large
                 grads_in = jax.tree.map(
-                    lambda g, v: g + damp_eps * jnp.mean(jnp.abs(g)) * v,
+                    lambda g, v: g + damp_eps.astype(g.dtype) * jnp.mean(jnp.abs(g)) * v,
                     grads_in,
                     Vs,
                 )
