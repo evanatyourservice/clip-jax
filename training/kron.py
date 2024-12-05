@@ -112,7 +112,7 @@ def scale_by_kron(
         optax.GradientTransformationExtraArgs
     """
     mu_dtype = canonicalize_dtype(mu_dtype)
-    precond_dtype = canonicalize_dtype(precond_dtype)
+    precond_dtype = canonicalize_dtype(precond_dtype or jnp.float32)
     preconditioner_lr = 0.1
     preconditioner_init_scale = 1.0
     lax_map = lax_map_scanned_layers
@@ -612,15 +612,24 @@ def scale_by_kron(
 
                 # create random vectors
                 key, subkey = jax.random.split(key)
-                Vs = _tree_random_like(subkey, momentum_updates)
+                Vs = _tree_random_like(subkey, momentum_updates, dtype=precond_dtype)
                 # apply params sharding to random vectors
                 if have_params_sharding:
                     Vs = _safe_sharding_constraint(Vs, partitioned_sharding)
 
+                # damp based on machine precision
+                grads_in = otu.tree_cast(momentum_updates, precond_dtype)
+                damp_eps = jnp.sqrt(jnp.finfo(jnp.float32).eps)
+                grads_in = jax.tree.map(
+                    lambda g, v: g + damp_eps * jnp.mean(jnp.abs(g)) * v,
+                    grads_in,
+                    Vs,
+                )
+
                 # form conjB
                 conjBs = jax.tree.map(
                     lambda g, Q, v, nm: _map_fn(lax_map, bs, nm, _conjB, Q, g, v),
-                    momentum_updates,
+                    grads_in,
                     Qs,
                     Vs,
                     n_dims_to_map,
@@ -645,7 +654,7 @@ def scale_by_kron(
                         g,
                         conjb,
                     ),
-                    momentum_updates,
+                    grads_in,
                     Qs,
                     conjBs,
                     exprs,
