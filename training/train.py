@@ -1374,7 +1374,6 @@ def main():
                 target_merged_dim_size=4096,
                 partition_grads_into_blocks=training_args.kron_partition_grads_into_blocks,
                 block_size=training_args.kron_block_size,
-                buffer_qq=False,
                 params_sharding=params_spec,
                 preconditioner_sharding=PartitionSpec(None, None),
             )
