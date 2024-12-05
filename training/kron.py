@@ -649,13 +649,6 @@ def scale_by_kron(
                     if have_qs_sharding:
                         Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
-                # create random vectors
-                key, subkey = jax.random.split(key)
-                Vs = _tree_random_like(subkey, momentum_updates)
-                # apply params sharding to random vectors
-                if have_params_sharding:
-                    Vs = _safe_sharding_constraint(Vs, partitioned_sharding)
-
                 # balance preconditioners about every 100 updates
                 def balance_Qs(Qs_to_bal):
                     def _balance_Q(Q):
@@ -678,6 +671,13 @@ def scale_by_kron(
                 Qs = jax.lax.cond(do_balances, balance_Qs, lambda qs: qs, Qs)
                 if have_qs_sharding:
                     Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+
+                # create random vectors
+                key, subkey = jax.random.split(key)
+                Vs = _tree_random_like(subkey, momentum_updates)
+                # apply params sharding to random vectors
+                if have_params_sharding:
+                    Vs = _safe_sharding_constraint(Vs, partitioned_sharding)
 
                 # form conjB
                 conjBs = jax.tree.map(
@@ -750,17 +750,6 @@ def scale_by_kron(
                 new_Qs = otu.tree_cast(new_Qs, precond_dtype)
                 return new_Qs
 
-        # update preconditioner deterministically
-        update_counter_inc = safe_int32_increment(state["update_counter"])
-        do_update = update_counter_inc >= 1 / update_prob_in
-        update_counter_inc = jnp.where(do_update, 0, update_counter_inc)
-        key, subkey = jax.random.split(key)
-        new_Qs = jax.lax.cond(
-            do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
-        )
-        if have_qs_sharding:
-            new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
-
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
             # precondition with stale Qs
@@ -814,6 +803,17 @@ def scale_by_kron(
             )
             if have_params_sharding:
                 precond_gs = _safe_sharding_constraint(precond_gs, partitioned_sharding)
+
+        # update preconditioner deterministically
+        update_counter_inc = safe_int32_increment(state["update_counter"])
+        do_update = update_counter_inc >= 1 / update_prob_in
+        update_counter_inc = jnp.where(do_update, 0, update_counter_inc)
+        key, subkey = jax.random.split(key)
+        new_Qs = jax.lax.cond(
+            do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
+        )
+        if have_qs_sharding:
+            new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
 
         # unpartition grads
         if partition_grads_into_blocks:
