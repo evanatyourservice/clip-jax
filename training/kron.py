@@ -667,6 +667,15 @@ def scale_by_kron(
 
                 new_Qs = otu.tree_cast(new_Qs, precond_dtype)
                 return new_Qs
+            
+        # update preconditioner deterministically
+        update_counter_inc = safe_int32_increment(state["update_counter"])
+        do_update = update_counter_inc >= 1 / update_prob_in
+        update_counter_inc = jnp.where(do_update, 0, update_counter_inc)
+        key, subkey = jax.random.split(key)
+        Qs = jax.lax.cond(do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs)
+        if have_qs_sharding:
+            Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
@@ -687,17 +696,6 @@ def scale_by_kron(
             )
             if have_params_sharding:
                 precond_gs = _safe_sharding_constraint(precond_gs, partitioned_sharding)
-
-        # update preconditioner deterministically
-        update_counter_inc = safe_int32_increment(state["update_counter"])
-        do_update = update_counter_inc >= 1 / update_prob_in
-        update_counter_inc = jnp.where(do_update, 0, update_counter_inc)
-        key, subkey = jax.random.split(key)
-        new_Qs = jax.lax.cond(
-            do_update, update_preconditioner, lambda _, qs: qs, subkey, Qs
-        )
-        if have_qs_sharding:
-            new_Qs = _safe_sharding_constraint(new_Qs, Qs_sharding)
 
         # unpartition grads
         if partition_grads_into_blocks:
@@ -759,11 +757,11 @@ def scale_by_kron(
 
         # dtypes and new state
         mu = otu.tree_cast(mu, mu_dtype)
-        new_Qs = otu.tree_cast(new_Qs, precond_dtype)
+        Qs = otu.tree_cast(Qs, precond_dtype)
         state = dict(
             count=count_inc,
             mu=mu,
-            Qs_preconditioners=new_Qs,
+            Qs_preconditioners=Qs,
             update_counter=update_counter_inc,
         )
 
