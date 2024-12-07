@@ -49,6 +49,8 @@ def scale_by_kron(
     max_size_triangular: int = 8192,
     min_ndim_triangular: int = 2,
     memory_save_mode: Optional[str] = None,
+    preconditioner_lr: float = 0.1,
+    preconditioner_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_update_precision: Optional[str] = "tensorfloat32",
@@ -80,6 +82,8 @@ def scale_by_kron(
             to set all preconditioners to be triangular, 'one_diag' sets the largest
             or last dim to be diagonal per layer, and 'all_diag' sets all preconditioners
             to be diagonal.
+        preconditioner_lr: float, learning rate for preconditioner.
+        preconditioner_init_scale: float, scale for preconditioner initialization.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum buffer. Defaults to
             same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioners. Defaults
@@ -113,8 +117,6 @@ def scale_by_kron(
     """
     mu_dtype = canonicalize_dtype(mu_dtype)
     precond_dtype = canonicalize_dtype(precond_dtype or jnp.float32)
-    preconditioner_lr = 0.1
-    preconditioner_init_scale = 1.0
     lax_map = lax_map_scanned_layers
     bs = lax_map_batch_size
 
@@ -617,8 +619,8 @@ def scale_by_kron(
                 if have_params_sharding:
                     Vs = _safe_sharding_constraint(Vs, partitioned_sharding)
 
-                # damp based on machine precision
-                damp_eps = jnp.sqrt(jnp.finfo(jnp.float32).eps)  # bf16 eps too large
+                # damp based on machine precision (f32 probably enough)
+                damp_eps = jnp.sqrt(jnp.finfo(jnp.float32).eps)
                 grads_in = jax.tree.map(
                     lambda g, v: g + damp_eps.astype(g.dtype) * jnp.mean(jnp.abs(g)) * v,
                     momentum_updates,
@@ -781,6 +783,8 @@ def kron(
     max_size_triangular: int = 8192,
     min_ndim_triangular: int = 2,
     memory_save_mode: Optional[str] = None,
+    preconditioner_lr: float = 0.1,
+    preconditioner_init_scale: float = 1.0,
     mu_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_dtype: Optional[Union[str, jnp.dtype]] = None,
     precond_update_precision: Optional[str] = "tensorfloat32",
@@ -816,6 +820,8 @@ def kron(
             to set all preconditioners to be triangular, 'one_diag' sets the largest
             or last dim to be diagonal per layer, and 'all_diag' sets all preconditioners
             to be diagonal.
+        preconditioner_lr: float, learning rate for preconditioner.
+        preconditioner_init_scale: float, scale for preconditioner initialization.
         mu_dtype: optional str or jnp.dtype, dtype of the momentum buffer. Defaults to
             same dtype as the parameters.
         precond_dtype: optional str or jnp.dtype, dtype of the preconditioners. Defaults
@@ -855,6 +861,8 @@ def kron(
             max_size_triangular=max_size_triangular,
             min_ndim_triangular=min_ndim_triangular,
             memory_save_mode=memory_save_mode,
+            preconditioner_lr=preconditioner_lr,
+            preconditioner_init_scale=preconditioner_init_scale,
             mu_dtype=mu_dtype,
             precond_dtype=precond_dtype,
             precond_update_precision=precond_update_precision,
