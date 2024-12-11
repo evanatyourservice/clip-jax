@@ -1105,7 +1105,7 @@ x = g1 @ Q.T @ Q
 print(x.T @ x) # should be close to eye 
 """
 def init_q_with_eigh_cholesky(g, Qs):
-    sorted_dims = [-i for _, i in sorted([(s, -i) for i, s in enumerate(g.shape)])]
+    sorted_dims = jnp.argsort(g.shape)
     is_diag = [True if q.ndim == 1 else False for q in Qs]
     is_diag = [is_diag[i] for i in sorted_dims]
     smallest_dim = None
