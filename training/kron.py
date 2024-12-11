@@ -1119,9 +1119,10 @@ def init_q_with_eigh_cholesky(g, Qs):
             break
     if dim_to_init is None:
         return Qs
+    dim_size = g.shape[dim_to_init]
     print(f"dim_to_init: {dim_to_init}")
-    g = jnp.swapaxes(g, dim_to_init, -1)
-    g = jnp.reshape(g, (-1, g.shape[dim_to_init]))
+    g = jnp.swapaxes(g, dim_to_init, len(g.shape) - 1)
+    g = jnp.reshape(g, (-1, dim_size))
     gg = jnp.einsum("ij,ik->jk", g, g)
     D, U = jnp.linalg.eigh(gg.astype(jnp.float32))
     D = jnp.clip(D, a_min=1e-6 * jnp.max(D))
