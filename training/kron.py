@@ -1106,7 +1106,7 @@ print(x.T @ x) # should be close to eye
 """
 def init_q_with_eigh_cholesky(g, Qs):
     sorted_dims = np.argsort(g.shape)
-    is_diag = [True if q.ndim == 1 else False for q in Qs]
+    is_diag = [True if q.ndim < 2 else False for q in Qs]
     is_diag = [is_diag[i] for i in sorted_dims]
     dim_to_init = None
     for dim, is_diag in zip(sorted_dims, is_diag):
