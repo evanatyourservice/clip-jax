@@ -682,18 +682,18 @@ def scale_by_kron(
             Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
         # init Qs to inv qr on step 10 to quicken training
-        Qs = jax.lax.cond(
-            count_inc == 10,
-            lambda: jax.tree.map(
-                lambda g, Q, nm: _map_fn(lax_map, bs, nm, init_q_with_inv_qr, g, Q),
-                momentum_updates,
-                Qs,
-                n_dims_to_map,
-            ),
-            lambda: Qs,
-        )
-        if have_qs_sharding:
-            Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+        # Qs = jax.lax.cond(
+        #     count_inc == 10,
+        #     lambda: jax.tree.map(
+        #         lambda g, Q, nm: _map_fn(lax_map, bs, nm, init_q_with_inv_qr, g, Q),
+        #         momentum_updates,
+        #         Qs,
+        #         n_dims_to_map,
+        #     ),
+        #     lambda: Qs,
+        # )
+        # if have_qs_sharding:
+        #     Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
