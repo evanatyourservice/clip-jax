@@ -1104,7 +1104,7 @@ def init_q_with_inv_qr(grads, Qs):
     signs = jnp.where(jnp.diag(r) >= 0, 1.0, -1.0)
     r = jnp.diag(signs) @ r
     # clamp small values
-    r = jnp.clip(r, a_min=1e-12)
+    r = jnp.clip(r, a_min=1e-6)
     # invert
     q_inv = jnp.linalg.inv(r)
     # return new q
