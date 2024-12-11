@@ -1108,22 +1108,27 @@ def init_q_with_eigh_cholesky(g, Qs):
     sorted_dims = jnp.argsort(g.shape)
     is_diag = [True if q.ndim == 1 else False for q in Qs]
     is_diag = [is_diag[i] for i in sorted_dims]
-    smallest_dim = None
+    smallest_dim_size = None
     for dim, is_diag in zip(sorted_dims, is_diag):
         if not is_diag:
-            smallest_dim = dim
+            smallest_dim_size = g.shape[dim]
             break
-    if smallest_dim is None:
+    if smallest_dim_size is None:
         return Qs
-    g = jnp.swapaxes(g, smallest_dim, -1)
-    g = jnp.reshape(g, [-1, smallest_dim])
+    dim_to_init = None
+    for dim in list(range(len(g.shape)))[::-1]:
+        if g.shape[dim] == smallest_dim_size:
+            dim_to_init = dim
+            break
+    g = jnp.swapaxes(g, dim_to_init, len(g.shape) - 1)
+    g = jnp.reshape(g, (-1, dim_to_init))
     gg = g.T @ g
     D, U = jnp.linalg.eigh(gg.astype(jnp.float32))
     D = jnp.clip(D, a_min=1e-6 * jnp.max(D))
     invsqrtR = U @ jnp.diag(1/D**0.5) @ U.T
     Q = jnp.linalg.cholesky(invsqrtR, upper=True)
-    Q = Q.astype(Qs[smallest_dim].dtype)
-    Qs[smallest_dim] = Q
+    Q = Q.astype(Qs[dim_to_init].dtype)
+    Qs[dim_to_init] = Q
     return Qs
 
 
