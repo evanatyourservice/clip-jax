@@ -1125,8 +1125,7 @@ def init_q_with_eigh_cholesky(g, Qs):
     invsqrtR = U @ jnp.diag(1/D**0.5) @ U.T
     Q = jnp.linalg.cholesky(invsqrtR, upper=True)
     Q = Q.astype(Qs[dim_to_init].dtype)
-    Qs[dim_to_init] = Q
-    return Qs
+    return [a if i != dim_to_init else Q for i, a in enumerate(Qs)]
 
 
 def _norm_lower_bound(A: jax.Array):
