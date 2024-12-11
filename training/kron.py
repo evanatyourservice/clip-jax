@@ -682,18 +682,18 @@ def scale_by_kron(
             Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
         # init Qs to inv qr on step 10 to quicken training
-        # Qs = jax.lax.cond(
-        #     count_inc == 10,
-        #     lambda: jax.tree.map(
-        #         lambda g, Q, nm: _map_fn(lax_map, bs, nm, init_q_with_inv_qr, g, Q),
-        #         momentum_updates,
-        #         Qs,
-        #         n_dims_to_map,
-        #     ),
-        #     lambda: Qs,
-        # )
-        # if have_qs_sharding:
-        #     Qs = _safe_sharding_constraint(Qs, Qs_sharding)
+        Qs = jax.lax.cond(
+            count_inc == 10,
+            lambda: jax.tree.map(
+                lambda g, Q, nm: _map_fn(lax_map, bs, nm, init_q_with_eigh_cholesky, g, Q),
+                momentum_updates,
+                Qs,
+                n_dims_to_map,
+            ),
+            lambda: Qs,
+        )
+        if have_qs_sharding:
+            Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
@@ -1077,9 +1077,36 @@ def _init_Q_exprs(
     return Q, (exprA, exprGs, exprP), sharding_out
 
 
-def init_q_with_inv_qr(grads, Qs):
-    sorted_dims = np.argsort(grads.shape)
-    is_diag = [True if x.ndim == 1 else False for x in Qs]
+"""
+import torch
+
+g = torch.rand(3, 5, 4) # the gradient 
+
+shape = g.shape 
+len_shape = len(shape)
+assert(len_shape > 1) # only try this for matrix or higher order tensor
+min_size = min(shape)
+assert(min_size > 1) # assume it is already squeezed 
+
+Qs = [torch.eye(s) for s in shape] # init all Q to eye 
+for i, s in enumerate(shape[::-1]): # scanning from the last dim  
+    if s == min_size:
+        g1 = torch.transpose(g, len_shape - i - 1, -1) # switch it to the last dim 
+        g1 = torch.reshape(g1, [-1, min_size])
+        R = g1.T @ g1
+        D, U = torch.linalg.eigh(R) # use eigh, not eig 
+        D = torch.clamp(D, min = 1e-6*torch.max(D))
+        invsqrtR = U @ torch.diag(1/D**0.5) @ U.T
+        Q = torch.linalg.cholesky(invsqrtR, upper=True)  
+        Qs[len_shape - i - 1] = Q
+        break
+
+x = g1 @ Q.T @ Q
+print(x.T @ x) # should be close to eye 
+"""
+def init_q_with_eigh_cholesky(g, Qs):
+    sorted_dims = [i for _, i in sorted([(s, -i) for i, s in enumerate(g.shape)])]
+    is_diag = [True if q.ndim == 1 else False for q in Qs]
     is_diag = [is_diag[i] for i in sorted_dims]
     smallest_dim = None
     for dim, is_diag in zip(sorted_dims, is_diag):
@@ -1088,28 +1115,15 @@ def init_q_with_inv_qr(grads, Qs):
             break
     if smallest_dim is None:
         return Qs
-    lowercase = string.ascii_lowercase
-    grad_letters1 = lowercase[: grads.ndim]
-    grad_letters2 = grad_letters1
-    grad_letters1 = (
-        grad_letters1[:smallest_dim] + "x" + grad_letters1[smallest_dim + 1 :]
-    )
-    grad_letters2 = (
-        grad_letters2[:smallest_dim] + "y" + grad_letters2[smallest_dim + 1 :]
-    )
-    gg = jnp.einsum(f"{grad_letters1},{grad_letters2}->...xy", grads, grads)
-    # qr
-    r = jnp.linalg.qr(gg.astype(jnp.float32))[1]
-    # fix signs of r so that diag and rows are positive
-    signs = jnp.where(jnp.diag(r) >= 0, 1.0, -1.0)
-    r = jnp.diag(signs) @ r
-    # clamp small values
-    r = jnp.clip(r, a_min=1e-6)
-    # invert
-    q_inv = jnp.linalg.inv(r)
-    # return new q
-    q_inv = q_inv.astype(Qs[smallest_dim].dtype)
-    Qs[smallest_dim] = jnp.triu(q_inv)
+    g = jnp.swapaxes(g, smallest_dim, -1)
+    g = jnp.reshape(g, [-1, smallest_dim])
+    gg = g.T @ g
+    D, U = jnp.linalg.eigh(gg.astype(jnp.float32))
+    D = jnp.clip(D, a_min=1e-6 * jnp.max(D))
+    invsqrtR = U @ jnp.diag(1/D**0.5) @ U.T
+    Q = jnp.linalg.cholesky(invsqrtR, upper=True)
+    Q = Q.astype(Qs[smallest_dim].dtype)
+    Qs[smallest_dim] = Q
     return Qs
 
 
