@@ -1107,19 +1107,14 @@ print(x.T @ x) # should be close to eye
 def init_q_with_eigh_cholesky(g, Qs):
     sorted_dims = np.argsort(g.shape)
     is_diag = [True if q.ndim == 1 else False for q in Qs]
-    sorted_is_diag = [is_diag[i] for i in sorted_dims]
-    smallest_dim_size = None
-    for dim, sorted_is_diag in zip(sorted_dims, sorted_is_diag):
-        if not sorted_is_diag:
-            smallest_dim_size = g.shape[dim]
-            break
-    if smallest_dim_size is None:
-        return Qs
+    is_diag = [is_diag[i] for i in sorted_dims]
     dim_to_init = None
-    for is_diag, dim in zip(is_diag[::-1], list(range(len(g.shape)))[::-1]):
-        if not is_diag and g.shape[dim] == smallest_dim_size:
+    for dim, is_diag in zip(sorted_dims, is_diag):
+        if not is_diag:
             dim_to_init = dim
             break
+    if dim_to_init is None:
+        return Qs
     g = jnp.swapaxes(g, dim_to_init, len(g.shape) - 1)
     g = jnp.reshape(g, (-1, dim_to_init))
     gg = g.T @ g
