@@ -1078,7 +1078,7 @@ def _init_Q_exprs(
 
 
 def init_q_with_inv_qr(grads, Qs):
-    sorted_dims = jnp.argsort(grads.shape)
+    sorted_dims = np.argsort(grads.shape)
     is_diag = [True if x.ndim == 1 else False for x in Qs]
     is_diag = [is_diag[i] for i in sorted_dims]
     smallest_dim = None
