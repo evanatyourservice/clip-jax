@@ -1105,6 +1105,8 @@ x = g1 @ Q.T @ Q
 print(x.T @ x) # should be close to eye 
 """
 def init_q_with_eigh_cholesky(g, Qs):
+    print(f"g.shape: {g.shape}")
+    print(f"Qs: {jax.tree.map(lambda x: x.shape, Qs)}")
     if not g.shape:
         return Qs
     sorted_dims = np.argsort(g.shape)
@@ -1117,6 +1119,7 @@ def init_q_with_eigh_cholesky(g, Qs):
             break
     if dim_to_init is None:
         return Qs
+    print(f"dim_to_init: {dim_to_init}")
     g = jnp.swapaxes(g, dim_to_init, -1)
     g = jnp.reshape(g, (-1, g.shape[dim_to_init]))
     gg = jnp.einsum("ij,ik->jk", g, g)
@@ -1125,6 +1128,7 @@ def init_q_with_eigh_cholesky(g, Qs):
     invsqrtR = U @ jnp.diag(1/D**0.5) @ U.T
     Q = jnp.linalg.cholesky(invsqrtR, upper=True)
     Q = Q.astype(Qs[dim_to_init].dtype)
+    print(f"Q.shape: {Q.shape}")
     return [a if i != dim_to_init else Q for i, a in enumerate(Qs)]
 
 
