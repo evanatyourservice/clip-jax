@@ -1077,60 +1077,25 @@ def _init_Q_exprs(
     return Q, (exprA, exprGs, exprP), sharding_out
 
 
-"""
-import torch
-
-g = torch.rand(3, 5, 4) # the gradient 
-
-shape = g.shape 
-len_shape = len(shape)
-assert(len_shape > 1) # only try this for matrix or higher order tensor
-min_size = min(shape)
-assert(min_size > 1) # assume it is already squeezed 
-
-Qs = [torch.eye(s) for s in shape] # init all Q to eye 
-for i, s in enumerate(shape[::-1]): # scanning from the last dim  
-    if s == min_size:
-        g1 = torch.transpose(g, len_shape - i - 1, -1) # switch it to the last dim 
-        g1 = torch.reshape(g1, [-1, min_size])
-        R = g1.T @ g1
-        D, U = torch.linalg.eigh(R) # use eigh, not eig 
-        D = torch.clamp(D, min = 1e-6*torch.max(D))
-        invsqrtR = U @ torch.diag(1/D**0.5) @ U.T
-        Q = torch.linalg.cholesky(invsqrtR, upper=True)  
-        Qs[len_shape - i - 1] = Q
-        break
-
-x = g1 @ Q.T @ Q
-print(x.T @ x) # should be close to eye 
-"""
 def init_q_with_eigh_cholesky(g, Qs):
-    print(f"g.shape: {g.shape}")
-    print(f"Qs: {jax.tree.map(lambda x: x.shape, Qs)}")
     if not g.shape:
         return Qs
-    sorted_dims = np.argsort(g.shape)
     is_diag = [True if (q.ndim < 2 or q.size < 2) else False for q in Qs]
-    is_diag = [is_diag[i] for i in sorted_dims]
-    dim_to_init = None
-    for dim, is_diag in zip(sorted_dims, is_diag):
-        if not is_diag:
-            dim_to_init = dim
-            break
-    if dim_to_init is None:
-        return Qs
-    dim_size = g.shape[dim_to_init]
-    print(f"dim_to_init: {dim_to_init}")
-    g = jnp.swapaxes(g, dim_to_init, len(g.shape) - 1)
-    g = jnp.reshape(g, (-1, dim_size))
-    gg = jnp.einsum("ij,ik->jk", g, g)
-    D, U = jnp.linalg.eigh(gg.astype(jnp.float32))
-    D = jnp.clip(D, a_min=1e-6 * jnp.max(D))
-    invsqrtR = U @ jnp.diag(1/D**0.5) @ U.T
-    Q = jnp.linalg.cholesky(invsqrtR, upper=True)
-    Q = Q.astype(Qs[dim_to_init].dtype)
-    print(f"Q.shape: {Q.shape}")
-    return [a if i != dim_to_init else Q for i, a in enumerate(Qs)]
+    new_Qs = []
+    for dim, (is_d, Q) in enumerate(zip(is_diag, Qs)):
+        if is_d:
+            new_Qs.append(Q)
+            continue
+        dim_size = g.shape[dim]
+        g_reshaped = jnp.swapaxes(g, dim, len(g.shape) - 1)
+        g_reshaped = jnp.reshape(g_reshaped, (-1, dim_size))
+        gg = jnp.einsum("ij,ik->jk", g_reshaped, g_reshaped)
+        D, U = jnp.linalg.eigh(gg.astype(jnp.float32))
+        D = jnp.clip(D, a_min=1e-6 * jnp.max(D))
+        invsqrtR = U @ jnp.diag(1/D**0.5) @ U.T
+        Q_new = jnp.linalg.cholesky(invsqrtR, upper=True)
+        new_Qs.append(Q_new.astype(Q.dtype))
+    return new_Qs
 
 
 def _norm_lower_bound(A: jax.Array):
