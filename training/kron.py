@@ -681,20 +681,6 @@ def scale_by_kron(
         if have_qs_sharding:
             Qs = _safe_sharding_constraint(Qs, Qs_sharding)
 
-        # init Qs to inv qr on step 10 to quicken training
-        # Qs = jax.lax.cond(
-        #     count_inc == 10,
-        #     lambda: jax.tree.map(
-        #         lambda g, Q, nm: _map_fn(lax_map, bs, nm, init_q_with_eigh_cholesky, g, Q),
-        #         momentum_updates,
-        #         Qs,
-        #         n_dims_to_map,
-        #     ),
-        #     lambda: Qs,
-        # )
-        # if have_qs_sharding:
-        #     Qs = _safe_sharding_constraint(Qs, Qs_sharding)
-
         # precondition gradients
         with jax.default_matmul_precision(precond_grads_precision):
             # precondition with stale Qs
@@ -1075,27 +1061,6 @@ def _init_Q_exprs(
     if existing_Q is not None:
         return (exprA, exprGs, exprP), sharding_out
     return Q, (exprA, exprGs, exprP), sharding_out
-
-
-def init_q_with_eigh_cholesky(g, Qs):
-    if not g.shape:
-        return Qs
-    is_diag = [True if (q.ndim < 2 or q.size < 2) else False for q in Qs]
-    new_Qs = []
-    for dim, (is_d, Q) in enumerate(zip(is_diag, Qs)):
-        if is_d:
-            new_Qs.append(Q)
-            continue
-        dim_size = g.shape[dim]
-        g_reshaped = jnp.swapaxes(g, dim, len(g.shape) - 1)
-        g_reshaped = jnp.reshape(g_reshaped, (-1, dim_size))
-        gg = jnp.einsum("ij,ik->jk", g_reshaped, g_reshaped)
-        D, U = jnp.linalg.eigh(gg.astype(jnp.float32))
-        D = jnp.clip(D, a_min=1e-6 * jnp.max(D))
-        invsqrtR = U @ jnp.diag(1/D**0.5) @ U.T
-        Q_new = jnp.linalg.cholesky(invsqrtR, upper=True)
-        new_Qs.append(Q_new.astype(Q.dtype))
-    return new_Qs
 
 
 def _norm_lower_bound(A: jax.Array):
