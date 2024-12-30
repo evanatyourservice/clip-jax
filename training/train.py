@@ -1361,7 +1361,7 @@ def main():
         _opt = [
             scale_by_kron(
                 b1=training_args.beta1,
-                normalize_grads=True,
+                normalize_grads=False,
                 preconditioner_update_probability=precond_update_prob_schedule(
                     min_prob=1 / training_args.preconditioning_compute_steps
                 ),
@@ -1376,7 +1376,8 @@ def main():
                 block_size=training_args.kron_block_size,
                 params_sharding=params_spec,
                 preconditioner_sharding=PartitionSpec(None, None),
-            )
+            ),
+            optax.clip_by_block_rms(1.1),
         ]
         if training_args.weight_decay > 0.0:
             _opt.append(optax.add_decayed_weights(training_args.weight_decay))
