@@ -46,6 +46,7 @@ from clip_jax.utils import asdict, count_params, load_config
 
 from adafactor import adafactorw
 from kron import get_opt_state_partition_specs, precond_update_prob_schedule, scale_by_kron
+from quad import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
 from muon import scale_by_muon
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 
@@ -203,6 +204,22 @@ class TrainingArguments:
         default=False,
         metadata={"help": "Partition grads into blocks for Kron."},
     )
+    quad_max_size_dense: int = field(
+        default=16384,
+        metadata={"help": "Max size to use dense preconditioners in QUAD."},
+    )
+    quad_max_skew_dense: float = field(
+        default=1.0,
+        metadata={"help": "Max skew threshold for dense preconditioners in QUAD."},
+    )
+    quad_preconditioner_lr: float = field(
+        default=0.7,
+        metadata={"help": "Learning rate for QUAD preconditioners."},
+    )
+    quad_target_merged_dim_size: int = field(
+        default=8192,
+        metadata={"help": "Target merged dimension size for QUAD small-dim merging."},
+    )
     lax_map_batch_size: Optional[int] = field(
         default=None,
         metadata={"help": "Batch size for lax.map."},
@@ -358,6 +375,7 @@ class TrainingArguments:
             "adam",
             "adafactor",
             "kron",
+            "quad",
             "muon",
         ], f"Unknown optimizer {self.optim}"
         assert self.graft_type in [
@@ -1324,6 +1342,30 @@ def main():
         _opt.append(optax.scale_by_learning_rate(learning_rate_fn))
         optimizer = optax.chain(*_opt)
 
+    elif training_args.optim == "quad":
+        # QUAD handles scanned layers internally; provide tree of booleans
+        scanned_layers_arg = scanned_params_bool(trainable_params(logical_params, training_args))
+        quad_kwargs = dict(
+            learning_rate=learning_rate_fn,
+            b1=training_args.beta1,
+            weight_decay=training_args.weight_decay,
+            normalize_grads=training_args.kron_normalize_grads,
+            max_size_dense=training_args.quad_max_size_dense,
+            max_skew_dense=training_args.quad_max_skew_dense,
+            preconditioner_lr=training_args.quad_preconditioner_lr,
+            scanned_layers=scanned_layers_arg,
+            lax_map_scanned_layers=True if training_args.lax_map_batch_size is not None else False,
+            lax_map_batch_size=training_args.lax_map_batch_size if training_args.lax_map_batch_size is not None else 8,
+            merge_small_dims=training_args.kron_merge_small_dims,
+            target_merged_dim_size=training_args.quad_target_merged_dim_size,
+            partition_grads_into_blocks=training_args.kron_partition_grads_into_blocks,
+            block_size=training_args.block_size_text,
+            params_partition_specs=trainable_params(params_spec, training_args),
+            preconditioner_partition_spec=PartitionSpec("data", None),
+            precond_dtype=jnp.float32,
+        )
+        optimizer = quad_opt(**quad_kwargs)
+
     elif training_args.optim == "adam":
         _opt = []
         if training_args.grad_clip_norm > 0:
@@ -1563,6 +1605,10 @@ def main():
             return get_opt_state_partition_specs(
                 trainable_params(logical_params, training_args), weight_decay=training_args.weight_decay, **kron_kwargs
             )
+        elif training_args.optim == "quad":
+            return get_opt_state_partition_specs_quad(
+                trainable_params(logical_params, training_args), **quad_kwargs
+            )
         elif training_args.optim in ["adam", "adafactor"]:
             return get_opt_state_spec_adamlike()
         elif training_args.optim == "distributed_shampoo":
@@ -1582,7 +1628,7 @@ def main():
 
     @partial(pjit, in_shardings=(params_spec,), out_shardings=opt_state_spec)
     def init_opt_state(params):
-        if training_args.optim in ["kron", "adafactor", "adam", "muon"]:
+        if training_args.optim in ["kron", "quad", "adafactor", "adam", "muon"]:
             return optimizer.init(trainable_params(params, training_args))
         opt_state = {}
         for k, p in split_scanned_params(trainable_params(params, training_args)).items():
@@ -1611,7 +1657,7 @@ def main():
 
     # Define update function
     def update_params(params, opt_state, grads):
-        if training_args.optim in ["kron", "adafactor", "adam", "muon"]:
+        if training_args.optim in ["kron", "quad", "adafactor", "adam", "muon"]:
             grads = trainable_params(grads, training_args)
             new_params = trainable_params(params, training_args)
             updates, new_opt_state = optimizer.update(grads, opt_state, new_params)
@@ -1937,6 +1983,14 @@ def main():
             psgd_idx = 0
             for part in new_opt_state:
                 if isinstance(part, dict):  # kron state is a dict
+                    if "Qs_preconditioners" in part:
+                        break
+                psgd_idx += 1
+            opt_state_step = new_opt_state[psgd_idx]["count"]
+        elif training_args.optim == "quad":
+            psgd_idx = 0
+            for part in new_opt_state:
+                if isinstance(part, dict):
                     if "Qs_preconditioners" in part:
                         break
                 psgd_idx += 1
