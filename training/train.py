@@ -1361,8 +1361,9 @@ def main():
             partition_grads_into_blocks=training_args.kron_partition_grads_into_blocks,
             block_size=training_args.block_size_text,
             params_partition_specs=trainable_params(params_spec, training_args),
-            preconditioner_partition_spec=PartitionSpec("data", None),
-            precond_dtype=jnp.float32,
+            preconditioner_partition_spec=PartitionSpec(None, None),
+            precond_dtype=jnp.bfloat16,
+            mu_dtype=jnp.bfloat16,
         )
         optimizer = quad_opt(**quad_kwargs)
 
