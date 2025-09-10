@@ -24,15 +24,17 @@ High-level flow per step
 2) **Prepare (always on)**:
    - Merge non-batch dims to the most square 1D/2D shape.
    - Build a BlockPartitioner that splits only non-diagonal axes by `block_size`.
-   - Pad only dense axes to their next multiple of `block_size`.
+   - Pad only dense axes to their next multiple of `block_size` with zeros for both
+     gradients and Qs.
    - Stack partitions → shape `[batch*stack, block..., block...]`.
 
 3) **Sharding**:
    - DENSE: concatenate all leaves along the leading dim; pad to a multiple of
-     `pipeline_axis_size`; set sharding constraint `P(pipeline_axis_name)`.
-     We keep Q/L for the concatenated dense path *in this sharded form*
-     between steps.
-   - LARGE: pad each leaf's leading dim to `pipeline_axis_size` and shard it.
+     `pipeline_axis_size` with ones/identity for Qs, ones for gradients and Ls;
+     set sharding constraint `P(pipeline_axis_name)`. We keep Q/L for the
+     concatenated dense path *in this sharded form* between steps.
+   - LARGE: pad each leaf's leading dim to `pipeline_axis_size` with ones/identity
+     for Qs, ones for gradients and Ls, and shard it.
    - ONE_D: replicated (no sharding needed).
 
 4) **QUAD update (vmapped)**:
@@ -86,10 +88,7 @@ PartitionSpecTree = TypeVar(
 def _shard(x, spec: Optional[Union[PartitionSpec, PartitionSpecTree]]):
     if spec is None:
         return x
-    try:
-        leaves, tdef = jax.tree.flatten(x)
-    except Exception:
-        return with_sharding_constraint(x, spec if isinstance(spec, PartitionSpec) else spec)
+    leaves, tdef = jax.tree.flatten(x)
     if isinstance(spec, PartitionSpec):
         return tdef.unflatten([with_sharding_constraint(v, spec) for v in leaves])
     try:
@@ -99,7 +98,10 @@ def _shard(x, spec: Optional[Union[PartitionSpec, PartitionSpecTree]]):
             return tdef.unflatten(out)
     except Exception:
         pass
-    return tdef.unflatten([with_sharding_constraint(v, spec) for v in leaves])  # fallback
+    raise ValueError(
+        "Sharding spec pytree does not match value pytree; pass a single PartitionSpec "
+        "to broadcast, or a structure-aligned pytree (allow None to skip)."
+    )
 
 
 def _merge_dims_and_diag(shape: Tuple[int, ...], max_dense: int) -> Tuple[List[int], List[bool]]:
@@ -165,33 +167,24 @@ def _is_1d_like(shape: Tuple[int, ...]) -> bool:
     return int(np.prod(shape)) == int(np.max(shape))
 
 
-def _pad_to_multiple(x: Optional[jax.Array], k: int) -> Optional[jax.Array]:
-    if x is None or k <= 1:
-        return x
-    pad = (-x.shape[0]) % k
-    return jnp.pad(x, [(0, pad)] + [(0, 0)] * (x.ndim - 1)) if pad else x
-
-
-def _pad_shard_leading(x: Optional[jax.Array], axis_name: Optional[str], axis_size: int) -> Optional[jax.Array]:
-    if x is None or axis_name is None:
-        return x
-    return _shard(_pad_to_multiple(x, axis_size), PartitionSpec(axis_name))
-
-
-def _pad_leading_with_identity(arr: Optional[jax.Array], k: int) -> Optional[jax.Array]:
+def _pad_leading_with_fill(arr: Optional[jax.Array], k: int, fill_value: float) -> Optional[jax.Array]:
     if arr is None or k <= 1:
         return arr
     pad = (-arr.shape[0]) % k
     if pad == 0:
         return arr
-    if arr.ndim == 3:
-        n = arr.shape[1]
-        tail = jnp.broadcast_to(jnp.eye(n, dtype=arr.dtype), (pad, n, n))
-    elif arr.ndim == 2:
-        tail = jnp.ones((pad, arr.shape[1]), dtype=arr.dtype)
-    else:
-        tail = jnp.ones((pad,) + arr.shape[1:], dtype=arr.dtype)
+    tail = jnp.full((pad,) + arr.shape[1:], fill_value, dtype=arr.dtype)
     return jnp.concatenate([arr, tail], axis=0)
+
+
+def _pad_shard_leading_axis(
+    arr: Optional[jax.Array], axis_name: Optional[str], axis_size: int, fill_value: float
+) -> Optional[jax.Array]:
+    """Pad along leading dim to a multiple of axis_size with `fill_value`, then shard."""
+    if arr is None:
+        return arr
+    arr = _pad_leading_with_fill(arr, axis_size, fill_value)
+    return _shard(arr, PartitionSpec(axis_name)) if axis_name is not None else arr
 
 
 def _pad_shard_Q_axes_list(
@@ -201,10 +194,27 @@ def _pad_shard_Q_axes_list(
         return None
     out: List[jax.Array] = []
     for x in lst:
-        x = _pad_leading_with_identity(x, axis_size)
+        # pad along leading (batch) dim to a multiple of axis_size
+        pad = 0 if axis_size <= 1 else ((-x.shape[0]) % axis_size)
+        if pad > 0:
+            # Use identity for square dense preconditioners, ones for diagonal
+            if x.ndim >= 3 and x.shape[-1] == x.shape[-2]:
+                n = x.shape[-1]
+                eye = jnp.eye(n, dtype=x.dtype)
+                tail = jnp.broadcast_to(eye, (pad, n, n))
+            else:
+                tail = jnp.ones((pad,) + x.shape[1:], dtype=x.dtype)
+            x = jnp.concatenate([x, tail], axis=0)
         x = _shard(x, PartitionSpec(axis_name)) if axis_name is not None else x
         out.append(x)
     return out
+
+
+def _fold_in_step_axis(step: jnp.ndarray, axis_name: Optional[str], salt: int) -> jax.Array:
+    """Make a PRNG key unique by step and (optionally) pipeline axis index."""
+    key = jax.random.PRNGKey(salt)
+    key = jax.random.fold_in(key, step)
+    return key
 
 
 class BlockPartitioner:
@@ -226,7 +236,11 @@ class BlockPartitioner:
                 split_sizes.append(np.array([d], dtype=np.int32))
         self._split_sizes = split_sizes
         single = [int(s[0]) for s in split_sizes]
-        padded_single = [(-(-d // block_size) * block_size) if not diag else d for d, diag in zip(single, dim_diag)]
+        if block_size and block_size > 0:
+            padded_single = [(-(-d // block_size) * block_size) if not diag else d for d, diag in zip(single, dim_diag)]
+        else:
+            # No blocking requested; do not pad non-diagonal axes either
+            padded_single = [d for d in single]
         stack = int(max(1, np.prod([max(1, len(s)) for s in split_sizes])))
         self._padded_stacked_shape = tuple([stack] + padded_single)
 
@@ -271,7 +285,10 @@ def _pad_and_stack_matrices(arrs: List[jax.Array], block: int, pad_mask: Optiona
     max_dims = [max(s[i] for s in shapes) for i in range(len(shapes[0]))]
     pad_mask = [True] * len(max_dims) if pad_mask is None else pad_mask
     target = [(-(-d // block) * block) if pad_mask[i] else d for i, d in enumerate(max_dims)]
-    padded = [jnp.pad(a, [(0, target[i] - a.shape[i]) for i in range(a.ndim)]) for a in items]
+    padded = [
+        jnp.pad(a, [(0, target[i] - a.shape[i]) for i in range(a.ndim)], constant_values=0)
+        for a in items
+    ]
     return jnp.stack(padded)
 
 
@@ -317,7 +334,7 @@ def _init_Q_exprs(
         if is_diag:
             if not exprs_only:
                 q = scale * jnp.ones(o_size, dtype=q_dtype)
-                q = q[:size] if size <= o_size else jnp.pad(q, (0, size - o_size))
+                q = q[:size] if size <= o_size else jnp.pad(q, (0, size - o_size), constant_values=0)
                 Q.append(q)
             b = letters[i + 13]
             p1.append(b)
@@ -329,7 +346,11 @@ def _init_Q_exprs(
         else:
             if not exprs_only:
                 q = scale * jnp.eye(o_size, dtype=q_dtype)
-                q = q[:size, :size] if size <= o_size else jnp.pad(q, ((0, size - o_size), (0, size - o_size)))
+                q = (
+                    q[:size, :size]
+                    if size <= o_size
+                    else jnp.pad(q, ((0, size - o_size), (0, size - o_size)), constant_values=0)
+                )
                 Q.append(q)
             a, b, c = letters[i], letters[i + 13], letters[i + 26]
             p1.append(a + b)
@@ -388,6 +409,20 @@ def _update_precond(Q_list, L_list, G, key, exprs, precond_lr, original_axis_siz
     Qn = [o[0] for o in outs]
     Ln = [o[1] for o in outs]
     return Qn, Ln, Pg_out
+
+
+def _reset_padded_rows(arr: jax.Array, valid_rows: int) -> jax.Array:
+    """Reset rows beyond valid_rows to identity (for 2D preconds) or ones (for diag)."""
+    if arr is None or valid_rows >= arr.shape[0]:
+        return arr
+    pad = arr.shape[0] - valid_rows
+    if arr.ndim >= 3 and arr.shape[-1] == arr.shape[-2]:
+        n = arr.shape[-1]
+        eye = jnp.eye(n, dtype=arr.dtype)
+        tail = jnp.broadcast_to(eye, (pad, n, n))
+    else:
+        tail = jnp.ones((pad,) + arr.shape[1:], dtype=arr.dtype)
+    return jnp.concatenate([arr[:valid_rows], tail], axis=0)
 
 
 def _build_exprs(prepared_group, merged_diags_group, merged_shapes_group, q_dtype):
@@ -511,7 +546,7 @@ def scale_by_quad(
     b1: float = 0.95,
     normalize_grads: bool = False,
     max_size_dense: int = 8192,
-    preconditioner_lr: float = 0.7,
+    preconditioner_lr: float = 0.6,
     preconditioner_init_scale: float = 1.0,
     dtype: Union[str, jnp.dtype] = jnp.bfloat16,
     scanned_layers: Optional[base.Params] = None,
@@ -609,7 +644,11 @@ def scale_by_quad(
         # shard dense path if requested
         if dense_Qs_cat is not None and pipeline_axis_name is not None:
             dense_Qs_cat = _pad_shard_Q_axes_list(dense_Qs_cat, pipeline_axis_name, pipeline_axis_size)
-            dense_Ls_cat = [_pad_shard_leading(l, pipeline_axis_name, pipeline_axis_size) for l in dense_Ls_cat]
+            # L is per-preconditioner scalar; pad with ones to keep update neutral
+            dense_Ls_cat = [
+                _shard(_pad_leading_with_fill(l, pipeline_axis_size, 1.0), PartitionSpec(pipeline_axis_name))
+                for l in dense_Ls_cat
+            ]
 
         # shard large path per-leaf if requested
         if pipeline_axis_name is not None:
@@ -620,7 +659,12 @@ def scale_by_quad(
             )
             Ls_ld = jax.tree.map(
                 lambda l: (
-                    None if l is None else [_pad_shard_leading(x, pipeline_axis_name, pipeline_axis_size) for x in l]
+                    None
+                    if l is None
+                    else [
+                        _shard(_pad_leading_with_fill(x, pipeline_axis_size, 1.0), PartitionSpec(pipeline_axis_name))
+                        for x in l
+                    ]
                 ),
                 Ls_ld,
                 is_leaf=lambda x: x is None or isinstance(x, list),
@@ -637,7 +681,7 @@ def scale_by_quad(
     def update_fn(updates: base.Updates, state: dict, params: base.Params | None = None):
         # compute step index and preconditioner lr
         step = safe_int32_increment(state["count"])
-        plr = jnp.maximum(preconditioner_lr * jax.lax.rsqrt(1.0 + step / 10000.0), 0.4)
+        plr = jnp.maximum(preconditioner_lr * jax.lax.rsqrt(1.0 + step / 10000.0), 0.3)
 
         # unbox flax partitioned updates if present
         flax_partitioned = False
@@ -708,29 +752,41 @@ def scale_by_quad(
                 pad = need - grads_cat.shape[0]
                 if pad < 0:
                     raise ValueError("Dense concat Q smaller than grads; check block_size/grouping.")
-                grads_cat = grads_cat if pad == 0 else jnp.pad(grads_cat, [(0, pad)] + [(0, 0)] * (grads_cat.ndim - 1))
-                if axis_sizes_cat is not None:
-                    axis_sizes_cat = (
-                        axis_sizes_cat if pad == 0 else jnp.pad(axis_sizes_cat, [(0, pad), (0, 0)], constant_values=1)
+                if pad > 0:
+                    grads_cat = jnp.pad(
+                        grads_cat,
+                        [(0, pad)] + [(0, 0)] * (grads_cat.ndim - 1),
+                        constant_values=1.0,
                     )
+                if axis_sizes_cat is not None:
+                    if pad > 0:
+                        axis_sizes_cat = jnp.pad(axis_sizes_cat, [(0, pad), (0, 0)], constant_values=1)
                 if pipeline_axis_name is not None:
                     grads_cat = _shard(grads_cat, PartitionSpec(pipeline_axis_name))
                     if axis_sizes_cat is not None:
                         axis_sizes_cat = _shard(axis_sizes_cat, PartitionSpec(pipeline_axis_name))
 
-                key = jax.random.fold_in(jax.random.PRNGKey(42), step)
-                keys = jax.random.split(key, grads_cat.shape[0])
+                key_dense = _fold_in_step_axis(step, pipeline_axis_name, salt=42)
+                keys = jax.random.split(key_dense, grads_cat.shape[0])
 
                 # generic vmap over list-pytrees of q/l
                 Qnew, Lnew, Pg_cat = vmap(lambda Qs, Ls, g, k, oz: _update_precond(Qs, Ls, g, k, exprs_dense, plr, oz))(
                     Qcat, Lcat, grads_cat, keys, axis_sizes_cat
                 )
 
+                # ensure preconditioned outputs are constrained to the pipeline axis
+                if pipeline_axis_name is not None:
+                    Pg_cat = _shard(Pg_cat, PartitionSpec(pipeline_axis_name))
+
                 valid = sum(splits)
 
-                # persist q/l and scatter grads back to tree
-                Qcat = [otu.tree_cast(Qnew[i], dtype) for i in range(len(Qcat))]
-                Lcat = [otu.tree_cast(Lnew[i], jnp.float32) for i in range(len(Lcat))]
+                # persist q/l (reset padded rows) and scatter grads back to tree
+                Qcat = [otu.tree_cast(_reset_padded_rows(Qnew[i], valid), dtype) for i in range(len(Qcat))]
+                Lcat = [otu.tree_cast(Lnew[i].at[valid:].set(1.0), jnp.float32) for i in range(len(Lcat))]
+                # reassert sharding of persistent state along pipeline axis
+                if pipeline_axis_name is not None:
+                    Qcat = _shard(Qcat, PartitionSpec(pipeline_axis_name))
+                    Lcat = _shard(Lcat, PartitionSpec(pipeline_axis_name))
                 state["Qs"]["dense_concat"], state["Ls"]["dense_concat"] = Qcat, Lcat
 
                 Pg_cat = Pg_cat[:valid]
@@ -751,18 +807,19 @@ def scale_by_quad(
         large_prep, l_os, l_mshapes, l_parts, l_pshapes, l_porig, l_diags = _prepare(
             mupd1, has_large, block_size, max_size_dense
         )
+        # valid rows before any batch-dimension padding (always defined)
+        large_valid = jax.tree.map(
+            lambda g: None if g is None else g.shape[0], large_prep, is_leaf=lambda x: x is None
+        )
         if pipeline_axis_name is not None:
-            large_valid = jax.tree.map(
-                lambda g: None if g is None else g.shape[0], large_prep, is_leaf=lambda x: x is None
-            )
             large_prep = jax.tree.map(
-                lambda g: _pad_shard_leading(g, pipeline_axis_name, pipeline_axis_size),
+                lambda g: _pad_shard_leading_axis(g, pipeline_axis_name, pipeline_axis_size, 1.0),
                 large_prep,
                 is_leaf=lambda x: x is None,
             )
         exprs_large = _build_exprs(large_prep, l_diags, l_mshapes, dtype)
 
-        key = jax.random.fold_in(jax.random.PRNGKey(42), step)
+        key = _fold_in_step_axis(step, pipeline_axis_name, salt=43)
 
         def _vmapped_update(g, Qlst, Llst, ex, osz):
             if g is None:
@@ -801,12 +858,32 @@ def scale_by_quad(
             QsL,
             is_leaf=lambda x: isinstance(x, tuple) or x is None,
         )
+        # ensure large-path preconditioned outputs are constrained to the pipeline axis
+        if pipeline_axis_name is not None:
+            precond_large = jax.tree.map(
+                lambda g: None if g is None else _shard(g, PartitionSpec(pipeline_axis_name)),
+                precond_large,
+                is_leaf=lambda x: x is None,
+            )
         # slice back to valid rows to discard padding
         precond_large = jax.tree.map(
             lambda g, v: None if (g is None or v is None) else g[:v],
             precond_large,
             large_valid,
             is_leaf=lambda x: x is None,
+        )
+        # reset padded Q/L rows for large path state (no-op when no padding)
+        Qs_new = jax.tree.map(
+            lambda q, v: None if (q is None or v is None) else [_reset_padded_rows(arr, v) for arr in q],
+            Qs_new,
+            large_valid,
+            is_leaf=lambda x: x is None or isinstance(x, list),
+        )
+        Ls_new = jax.tree.map(
+            lambda l, v: None if (l is None or v is None) else [arr.at[v:].set(1.0) for arr in l],
+            Ls_new,
+            large_valid,
+            is_leaf=lambda x: x is None or isinstance(x, list),
         )
         state["Qs"]["large"], state["Ls"]["large"] = Qs_new, Ls_new
 
@@ -815,16 +892,10 @@ def scale_by_quad(
             mupd1, is_1d, block_size, max_size_dense
         )
         exprs_one = _build_exprs(one_prep, o_diags, o_mshapes, dtype)
-        Qs1 = jax.tree.map(
-            lambda q: None if q is None else [q[0]],
-            state["Qs"]["one_d"],
-            is_leaf=lambda x: x is None or isinstance(x, list),
-        )
-        Ls1 = jax.tree.map(
-            lambda l: None if l is None else [l[0]],
-            state["Ls"]["one_d"],
-            is_leaf=lambda x: x is None or isinstance(x, list),
-        )
+        # keep batched per-sample ONE_D state, no slicing
+        Qs1 = state["Qs"]["one_d"]
+        Ls1 = state["Ls"]["one_d"]
+        key = _fold_in_step_axis(step, pipeline_axis_name, salt=44)
         oneL = jax.tree.map(
             _vmapped_update,
             one_prep,
@@ -874,7 +945,7 @@ def scale_by_quad(
             precond_all = jax.tree.map(lambda g: g / 5.0, precond_all)
 
         # re-box flax containers if we unboxed at entry
-        if flax_partitioned:
+        if flax_partitioned and params is not None:
             flat_p, tdef_p = jax.tree.flatten(
                 params, is_leaf=lambda g: hasattr(g, "unbox") or isinstance(g, jax.ShapeDtypeStruct)
             )
@@ -900,7 +971,7 @@ def quad(
     weight_decay_mask: Optional[Union[Any, Callable[[base.Params], Any]]] = None,
     normalize_grads: bool = False,
     max_size_dense: int = 8192,
-    preconditioner_lr: float = 0.7,
+    preconditioner_lr: float = 0.6,
     preconditioner_init_scale: float = 1.0,
     dtype: Union[str, jnp.dtype] = jnp.bfloat16,
     scanned_layers: Optional[base.Params] = None,
