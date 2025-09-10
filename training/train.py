@@ -46,7 +46,7 @@ from clip_jax.utils import asdict, count_params, load_config
 
 from adafactor import adafactorw
 from kron import get_opt_state_partition_specs, precond_update_prob_schedule, scale_by_kron
-from quad import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
+from quad2 import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
 from muon import scale_by_muon
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 
@@ -1347,23 +1347,18 @@ def main():
         scanned_layers_arg = scanned_params_bool(trainable_params(logical_params, training_args))
         quad_kwargs = dict(
             learning_rate=learning_rate_fn,
+            lr_style=None,
             b1=training_args.beta1,
             weight_decay=training_args.weight_decay,
             normalize_grads=training_args.kron_normalize_grads,
             max_size_dense=training_args.quad_max_size_dense,
-            max_skew_dense=training_args.quad_max_skew_dense,
             preconditioner_lr=training_args.quad_preconditioner_lr,
+            dtype=jnp.float32,
             scanned_layers=scanned_layers_arg,
-            lax_map_scanned_layers=True if training_args.lax_map_batch_size is not None else False,
-            lax_map_batch_size=training_args.lax_map_batch_size if training_args.lax_map_batch_size is not None else 8,
-            merge_small_dims=training_args.kron_merge_small_dims,
-            target_merged_dim_size=training_args.quad_target_merged_dim_size,
-            partition_grads_into_blocks=training_args.kron_partition_grads_into_blocks,
             block_size=training_args.block_size_text,
+            pipeline_axis_name="data",
+            pipeline_axis_size=training_args.dp_devices,
             params_partition_specs=trainable_params(params_spec, training_args),
-            preconditioner_partition_spec=PartitionSpec(None, None),
-            precond_dtype=jnp.bfloat16,
-            mu_dtype=jnp.bfloat16,
         )
         optimizer = quad_opt(**quad_kwargs)
 
@@ -1607,8 +1602,16 @@ def main():
                 trainable_params(logical_params, training_args), weight_decay=training_args.weight_decay, **kron_kwargs
             )
         elif training_args.optim == "quad":
+            quad_state_spec_kwargs = dict(
+                b1=training_args.beta1,
+                weight_decay=training_args.weight_decay,
+                scanned_layers=scanned_layers_arg,
+                max_size_dense=training_args.quad_max_size_dense,
+                pipeline_axis_name="data",
+                params_partition_specs=trainable_params(params_spec, training_args),
+            )
             return get_opt_state_partition_specs_quad(
-                trainable_params(logical_params, training_args), **quad_kwargs
+                trainable_params(logical_params, training_args), **quad_state_spec_kwargs
             )
         elif training_args.optim in ["adam", "adafactor"]:
             return get_opt_state_spec_adamlike()
@@ -1989,13 +1992,9 @@ def main():
                 psgd_idx += 1
             opt_state_step = new_opt_state[psgd_idx]["count"]
         elif training_args.optim == "quad":
-            psgd_idx = 0
-            for part in new_opt_state:
-                if isinstance(part, dict):
-                    if "Qs_preconditioners" in part:
-                        break
-                psgd_idx += 1
-            opt_state_step = new_opt_state[psgd_idx]["count"]
+            # quad2 state is the first element in the chain state
+            quad_state = new_opt_state[0] if isinstance(new_opt_state, tuple) else new_opt_state
+            opt_state_step = quad_state["count"]
         else:
             raise NotImplementedError
 
