@@ -469,6 +469,7 @@ def _prepare(tree, group_mask, block_size: int, max_dense: int):
 
 def _unprepare(precond_gs, orig_shapes, part_shapes, parts, part_orig_shapes, scanned_layers_):
     """invert `_prepare`: unstack, unpad, merge partitions, reshape, drop dummy."""
+
     # split leading dimension back to [batch, stack]
     def _split_leading(g, ps):
         if g is None or ps is None:
@@ -480,6 +481,7 @@ def _unprepare(precond_gs, orig_shapes, part_shapes, parts, part_orig_shapes, sc
     precond_gs = jax.tree.map(
         lambda g, ps: None if g is None else _split_leading(g, ps), precond_gs, part_shapes, is_leaf=lambda x: x is None
     )
+
     # unstack/unpad partitions, merge back, and restore merged shapes
     def _unprep_leaf(g, os, p, p_shapes):
         g = vmap(lambda x: _unstack_and_unpad_matrices(x, p_shapes))(g)
@@ -617,7 +619,9 @@ def scale_by_quad(
                 is_leaf=lambda x: x is None or isinstance(x, list),
             )
             Ls_ld = jax.tree.map(
-                lambda l: None if l is None else [_pad_shard_leading(x, pipeline_axis_name, pipeline_axis_size) for x in l],
+                lambda l: (
+                    None if l is None else [_pad_shard_leading(x, pipeline_axis_name, pipeline_axis_size) for x in l]
+                ),
                 Ls_ld,
                 is_leaf=lambda x: x is None or isinstance(x, list),
             )
@@ -707,9 +711,7 @@ def scale_by_quad(
                 grads_cat = grads_cat if pad == 0 else jnp.pad(grads_cat, [(0, pad)] + [(0, 0)] * (grads_cat.ndim - 1))
                 if axis_sizes_cat is not None:
                     axis_sizes_cat = (
-                        axis_sizes_cat
-                        if pad == 0
-                        else jnp.pad(axis_sizes_cat, [(0, pad), (0, 0)], constant_values=1)
+                        axis_sizes_cat if pad == 0 else jnp.pad(axis_sizes_cat, [(0, pad), (0, 0)], constant_values=1)
                     )
                 if pipeline_axis_name is not None:
                     grads_cat = _shard(grads_cat, PartitionSpec(pipeline_axis_name))
@@ -720,9 +722,9 @@ def scale_by_quad(
                 keys = jax.random.split(key, grads_cat.shape[0])
 
                 # generic vmap over list-pytrees of q/l
-                Qnew, Lnew, Pg_cat = vmap(
-                    lambda Qs, Ls, g, k, oz: _update_precond(Qs, Ls, g, k, exprs_dense, plr, oz)
-                )(Qcat, Lcat, grads_cat, keys, axis_sizes_cat)
+                Qnew, Lnew, Pg_cat = vmap(lambda Qs, Ls, g, k, oz: _update_precond(Qs, Ls, g, k, exprs_dense, plr, oz))(
+                    Qcat, Lcat, grads_cat, keys, axis_sizes_cat
+                )
 
                 valid = sum(splits)
 
