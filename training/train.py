@@ -46,7 +46,7 @@ from clip_jax.utils import asdict, count_params, load_config
 
 from adafactor import adafactorw
 from kron import get_opt_state_partition_specs, precond_update_prob_schedule, scale_by_kron
-from quad2 import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
+from quad_pipeline_simple import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
 from muon import scale_by_muon
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 
@@ -1353,6 +1353,7 @@ def main():
             normalize_grads=training_args.kron_normalize_grads,
             max_size_dense=training_args.quad_max_size_dense,
             preconditioner_lr=training_args.quad_preconditioner_lr,
+            preconditioner_init_scale=50.0,
             dtype=jnp.bfloat16,
             scanned_layers=scanned_layers_arg,
             block_size=training_args.block_size_text,
@@ -1602,16 +1603,8 @@ def main():
                 trainable_params(logical_params, training_args), weight_decay=training_args.weight_decay, **kron_kwargs
             )
         elif training_args.optim == "quad":
-            quad_state_spec_kwargs = dict(
-                b1=training_args.beta1,
-                weight_decay=training_args.weight_decay,
-                scanned_layers=scanned_layers_arg,
-                max_size_dense=training_args.quad_max_size_dense,
-                pipeline_axis_name="data",
-                params_partition_specs=trainable_params(params_spec, training_args),
-            )
             return get_opt_state_partition_specs_quad(
-                trainable_params(logical_params, training_args), **quad_state_spec_kwargs
+                trainable_params(logical_params, training_args), **quad_kwargs
             )
         elif training_args.optim in ["adam", "adafactor"]:
             return get_opt_state_spec_adamlike()

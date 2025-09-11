@@ -25,7 +25,7 @@ WANDB_NOTES=$instance_name python train.py \
     --remat_policy none \
     --learning_rate 3.0e-5 \
     --muon_learning_rate 3.0e-4 \
-    --warmup_steps 100 \
+    --warmup_steps 0 \
     --lr_offset 0 \
     --batch_size_per_node 512 \
     --gradient_accumulation_steps 1 \
@@ -37,11 +37,11 @@ WANDB_NOTES=$instance_name python train.py \
     --beta1 0.95 \
     --beta2 0.99 \
     --preconditioning_compute_steps 100 \
-    --block_size_text 256 \
-    --block_size_vision 256 \
-    --quad_max_size_dense 100000 \
-    --quad_max_skew_dense 100000 \
-    --quad_preconditioner_lr 0.6 \
+    --block_size_text 1024 \
+    --block_size_vision 1024 \
+    --quad_max_size_dense 16384 \
+    --quad_max_skew_dense 16384 \
+    --quad_preconditioner_lr 0.8 \
     --quad_target_merged_dim_size 4096 \
     --kron_merge_small_dims True \
     --kron_partition_grads_into_blocks True \
