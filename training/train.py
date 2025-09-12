@@ -46,7 +46,7 @@ from clip_jax.utils import asdict, count_params, load_config
 
 from adafactor import adafactorw
 from kron import get_opt_state_partition_specs, precond_update_prob_schedule, scale_by_kron
-from quad_pipeline_simple import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
+from quad_pipeline_simple_fast import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
 from muon import scale_by_muon
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 
@@ -1353,7 +1353,7 @@ def main():
             normalize_grads=training_args.kron_normalize_grads,
             max_size_dense=training_args.quad_max_size_dense,
             preconditioner_lr=training_args.quad_preconditioner_lr,
-            preconditioner_init_scale=1.0,
+            preconditioner_init_scale=2.0,
             dtype=jnp.bfloat16,
             scanned_layers=scanned_layers_arg,
             block_size=training_args.block_size_text,
