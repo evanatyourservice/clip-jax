@@ -420,8 +420,8 @@ def scale_by_quad(
                     for ri in range(nr):
                         for cj in range(nc):
                             vr, vc = row_sizes[ri], col_sizes[cj]
-                            Ql = _identity_padded(block_size, vr, dtype)
-                            Qr = _identity_padded(block_size, vc, dtype)
+                            Ql = _identity_padded(block_size, vr, dtype) * preconditioner_init_scale
+                            Qr = _identity_padded(block_size, vc, dtype) * preconditioner_init_scale
                             dense_Ql_list.append(Ql)
                             dense_Qr_list.append(Qr)
                             dense_Ll_list.append(jnp.zeros([], jnp.float32))
@@ -440,8 +440,8 @@ def scale_by_quad(
 
                 if diag_left and diag_right:
                     # dd: no blocking
-                    Ql = jnp.ones((B, m), dtype=dtype)
-                    Qr = jnp.ones((B, n), dtype=dtype)
+                    Ql = jnp.ones((B, m), dtype=dtype) * preconditioner_init_scale
+                    Qr = jnp.ones((B, n), dtype=dtype) * preconditioner_init_scale
                     Ll = jnp.zeros((B,), jnp.float32)
                     Lr = jnp.zeros((B,), jnp.float32)
                     large_state.append(
@@ -469,7 +469,7 @@ def scale_by_quad(
                     num_blocks_per_sample = (dim_to_block + block_size - 1) // block_size
                     stack = B * num_blocks_per_sample
 
-                    Q_diag = jnp.broadcast_to(jnp.ones((1, other_dim), dtype=dtype), (stack, other_dim))
+                    Q_diag = jnp.broadcast_to(jnp.ones((1, other_dim), dtype=dtype) * preconditioner_init_scale, (stack, other_dim))
 
                     Q_blocked_blocks = []
                     for _ in range(B):
@@ -484,7 +484,7 @@ def scale_by_quad(
                                 )
                             )
                             v = v if v > 0 else block_size
-                            Q_blocked_blocks.append(_identity_padded(block_size, v, dtype))
+                            Q_blocked_blocks.append(_identity_padded(block_size, v, dtype) * preconditioner_init_scale)
                     Q_blocked = jnp.stack(Q_blocked_blocks, axis=0)
 
                     Ql = Q_blocked if block_rows else Q_diag

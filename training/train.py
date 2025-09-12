@@ -1353,7 +1353,7 @@ def main():
             normalize_grads=training_args.kron_normalize_grads,
             max_size_dense=training_args.quad_max_size_dense,
             preconditioner_lr=training_args.quad_preconditioner_lr,
-            preconditioner_init_scale=50.0,
+            preconditioner_init_scale=1.0,
             dtype=jnp.bfloat16,
             scanned_layers=scanned_layers_arg,
             block_size=training_args.block_size_text,
