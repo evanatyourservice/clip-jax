@@ -46,7 +46,7 @@ from clip_jax.utils import asdict, count_params, load_config
 
 from adafactor import adafactorw
 from kron import get_opt_state_partition_specs, precond_update_prob_schedule, scale_by_kron
-from quad_pipeline_simple_fast import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
+from quad_pipeline_simple import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
 from muon import scale_by_muon
 from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 
