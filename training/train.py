@@ -1354,7 +1354,7 @@ def main():
             max_size_dense=training_args.quad_max_size_dense,
             preconditioner_lr=training_args.quad_preconditioner_lr,
             preconditioner_init_scale=2.0,
-            dtype=jnp.bfloat16,
+            dtype=jnp.float32,
             scanned_layers=scanned_layers_arg,
             block_size=training_args.block_size_text,
             pipeline_axis_name="data",
