@@ -1,3 +1,13 @@
+import os
+
+import jax
+
+# not completely sure why but pod hangs due to initialize when trying to use single VM
+if os.environ.get("TPU_VISIBLE_DEVICES") != "0,1,2,3":
+    # cluster initialization
+    jax.distributed.initialize()
+
+
 import itertools
 import json
 import logging
@@ -24,6 +34,7 @@ import tensorflow as tf
 import tensorflow_io as tfio
 import transformers
 import wandb
+from adafactor import adafactorw
 from einshape import jax_einshape as einshape
 from flax.training import orbax_utils
 from flax.traverse_util import flatten_dict, unflatten_dict
@@ -34,7 +45,12 @@ from jax.experimental.pjit import pjit
 from jax.experimental.shard_map import shard_map
 from jax.lax import with_sharding_constraint
 from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from kron import get_opt_state_partition_specs, precond_update_prob_schedule, scale_by_kron
+from muon import scale_by_muon
 from PIL import Image
+from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
+from quad_pipeline_simple import get_opt_state_partition_specs as get_opt_state_partition_specs_quad
+from quad_pipeline_simple import quad as quad_opt
 from tqdm import tqdm
 from transformers import HfArgumentParser
 
@@ -43,12 +59,6 @@ from clip_jax.data import DatasetWrapper, logits_to_image, preprocess_batch
 from clip_jax.partitions import logical_axis_rules
 from clip_jax.tokenizer import AutoTokenizer
 from clip_jax.utils import asdict, count_params, load_config
-
-from adafactor import adafactorw
-from kron import get_opt_state_partition_specs, precond_update_prob_schedule, scale_by_kron
-from quad_pipeline_simple import quad as quad_opt, get_opt_state_partition_specs as get_opt_state_partition_specs_quad
-from muon import scale_by_muon
-from precondition_local.distributed_shampoo import GraftingType, distributed_shampoo
 
 try:
     from google.cloud import storage
@@ -92,7 +102,7 @@ class TrainingArguments:
 
     gradient_accumulation_steps: str = field(
         default="1",
-        metadata={"help": ("Number of updates steps to accumulate before performing an update" " pass.")},
+        metadata={"help": ("Number of updates steps to accumulate before performing an update pass.")},
     )
     freeze_vision: bool = field(
         default=False,
@@ -180,7 +190,7 @@ class TrainingArguments:
     )
     optim_quantized: bool = field(
         default=False,
-        metadata={"help": ("Whether to quantize optimizer (only supported with Distributed" " Shampoo).")},
+        metadata={"help": ("Whether to quantize optimizer (only supported with Distributed Shampoo).")},
     )
     shard_shampoo_across: str = field(
         default="data",
@@ -215,6 +225,10 @@ class TrainingArguments:
     quad_preconditioner_lr: float = field(
         default=0.7,
         metadata={"help": "Learning rate for QUAD preconditioners."},
+    )
+    quad_preconditioner_update_style: str = field(
+        default="Q0p5EQ1p5",
+        metadata={"help": "Update style for QUAD preconditioners."},
     )
     quad_target_merged_dim_size: int = field(
         default=8192,
@@ -269,12 +283,12 @@ class TrainingArguments:
     )
     log_histogram_steps: int = field(
         default=False,
-        metadata={"help": ("Log parameters and gradients histograms at this frequency. Slows down" " training.")},
+        metadata={"help": ("Log parameters and gradients histograms at this frequency. Slows down training.")},
     )
 
     seed_model: int = field(
         default=42,
-        metadata={"help": ("Random seed for the model that will be set at the beginning of" " training.")},
+        metadata={"help": ("Random seed for the model that will be set at the beginning of training.")},
     )
 
     wandb_entity: Optional[str] = field(
@@ -344,9 +358,9 @@ class TrainingArguments:
                 "Use --overwrite_output_dir to overcome."
             )
         if self.output_dir.startswith("gs://"):
-            assert (
-                storage is not None
-            ), 'Could not find google.storage. Install with "pip install google-cloud-storage"'
+            assert storage is not None, (
+                'Could not find google.storage. Install with "pip install google-cloud-storage"'
+            )
         if self.do_profile:
             self.start_profile = 3
             self.end_profile = 6
@@ -391,6 +405,10 @@ class TrainingArguments:
             "model",
             "2d",
         ], f"Shard shampoo across {self.shard_shampoo_across} not supported."
+        assert self.quad_preconditioner_update_style in [
+            "QUAD",
+            "Q0p5EQ1p5",
+        ], f"Quad preconditioner update style {self.quad_preconditioner_update_style} not supported."
         assert self.activation_partitioning_dims in [
             1,
             2,
@@ -437,8 +455,7 @@ class ModelArguments:
         default=None,
         metadata={
             "help": (
-                "The model checkpoint for weights initialization. Don't set if you want"
-                " to train a model from scratch."
+                "The model checkpoint for weights initialization. Don't set if you want to train a model from scratch."
             )
         },
     )
@@ -544,7 +561,7 @@ class DataTrainingArguments:
     )
     min_original_image_size: Optional[int] = field(
         default=None,
-        metadata={"help": ("The minimum size (resolution) of each original image from training" " set.")},
+        metadata={"help": ("The minimum size (resolution) of each original image from training set.")},
     )
     max_original_aspect_ratio: Optional[float] = field(
         default=None,
@@ -800,9 +817,6 @@ def should_stop_training(metrics):
 
 
 def main():
-    # cluster initialization
-    jax.distributed.initialize()
-
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
@@ -1354,7 +1368,7 @@ def main():
             max_size_dense=training_args.quad_max_size_dense,
             preconditioner_lr=training_args.quad_preconditioner_lr,
             preconditioner_init_scale=3.0,
-            preconditioner_update_style="Q0p5EQ1p5",
+            preconditioner_update_style=training_args.quad_preconditioner_update_style,
             dtype=jnp.float32,
             scanned_layers=scanned_layers_arg,
             block_size=training_args.block_size_text,
@@ -1558,8 +1572,6 @@ def main():
 
         return out_specs
 
-
-
     def get_opt_state_spec_muon():
         def set_sharding(x):
             if isinstance(x, optax.MaskedNode):
@@ -1604,9 +1616,7 @@ def main():
                 trainable_params(logical_params, training_args), weight_decay=training_args.weight_decay, **kron_kwargs
             )
         elif training_args.optim == "quad":
-            return get_opt_state_partition_specs_quad(
-                trainable_params(logical_params, training_args), **quad_kwargs
-            )
+            return get_opt_state_partition_specs_quad(trainable_params(logical_params, training_args), **quad_kwargs)
         elif training_args.optim in ["adam", "adafactor"]:
             return get_opt_state_spec_adamlike()
         elif training_args.optim == "distributed_shampoo":
