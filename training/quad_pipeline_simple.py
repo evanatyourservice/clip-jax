@@ -954,7 +954,7 @@ def _preconditioning(
 
     if not diag_left and not diag_right:
         # DD
-        Pg = jax.numpy.linalg.multi_dot([Ql, Ql, Gn, Qr, Qr])
+        Pg = jax.numpy.linalg.multi_dot([Ql.T, Ql, Gn, Qr.T, Qr])
 
         term1L = Pg @ Pg.T
         term2L = total_numel / m
@@ -964,11 +964,11 @@ def _preconditioning(
         term2R = total_numel / n
         Qr_new, Lr_new = dense_update_fn(term1R, term2R, Lr, Qr, lr_precond)
 
-        Pg_out = jax.numpy.linalg.multi_dot([Ql_new, Ql_new, G, Qr_new, Qr_new])
+        Pg_out = jax.numpy.linalg.multi_dot([Ql_new.T, Ql_new, G, Qr_new.T, Qr_new])
 
     elif diag_left and not diag_right:
         # dD
-        Pg = (Ql * Ql)[:, None] * jax.numpy.linalg.multi_dot([Gn, Qr, Qr])
+        Pg = (Ql * Ql)[:, None] * jax.numpy.linalg.multi_dot([Gn, Qr.T, Qr])
 
         term1L = jnp.sum(Pg * Pg, axis=1)
         term2L = total_numel / m
@@ -978,11 +978,11 @@ def _preconditioning(
         term2R = total_numel / n
         Qr_new, Lr_new = dense_update_fn(term1R, term2R, Lr, Qr, lr_precond)
 
-        Pg_out = (Ql_new * Ql_new)[:, None] * jax.numpy.linalg.multi_dot([G, Qr_new, Qr_new])
+        Pg_out = (Ql_new * Ql_new)[:, None] * jax.numpy.linalg.multi_dot([G, Qr_new.T, Qr_new])
 
     elif not diag_left and diag_right:
         # Dd
-        Pg = jax.numpy.linalg.multi_dot([Ql, Ql, Gn]) * (Qr * Qr)[None, :]
+        Pg = jax.numpy.linalg.multi_dot([Ql.T, Ql, Gn]) * (Qr * Qr)[None, :]
 
         term1L = Pg @ Pg.T
         term2L = total_numel / m
@@ -992,7 +992,7 @@ def _preconditioning(
         term2R = total_numel / n
         Qr_new, Lr_new = diag_update_fn(term1R, term2R, Lr, Qr, lr_precond)
 
-        Pg_out = jax.numpy.linalg.multi_dot([Ql_new, Ql_new, G]) * (Qr_new * Qr_new)[None, :]
+        Pg_out = jax.numpy.linalg.multi_dot([Ql_new.T, Ql_new, G]) * (Qr_new * Qr_new)[None, :]
 
     else:
         # dd
