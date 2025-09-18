@@ -61,7 +61,7 @@ def scale_by_quad(
     max_size_dense: int = 8192,
     preconditioner_lr: float = 0.7,
     preconditioner_init_scale: float = 1.0,
-    preconditioner_update_style: str = "QUAD",
+    preconditioner_update_style: str = "Q0p5EQ1p5",
     dtype: Union[str, jnp.dtype] = jnp.bfloat16,
     scanned_layers: Optional[base.Params] = None,
     block_size: int = 256,
@@ -384,7 +384,7 @@ def scale_by_quad(
         mupd = otu.tree_cast(mupd, dtype)
 
         if normalize_grads:
-            mupd = jax.tree.map(lambda g: g / (jnp.linalg.norm(g) + 1e-6).astype(g.dtype), mupd)
+            mupd = jax.tree.map(lambda g: g / (jnp.linalg.norm(g) + 1e-6), mupd)
 
         leaves_u, tdef_u = jax.tree.flatten(mupd)
         perleaf_state: List[Any] = state["large"]
@@ -402,13 +402,13 @@ def scale_by_quad(
                 m, n = st.merged
                 nr, nc = st.nr, st.nc
                 x2d = jnp.reshape(leaf, (B, m, n))
-                current_block_size = _get(dense_state, "block_size")
+                current_block_size = dense_state.block_size
                 blocks, _ = _block2d(x2d, current_block_size)
                 blocks_list.append(blocks)
             if blocks_list:
                 grads_cat = jnp.concatenate(blocks_list, axis=0)
                 dense_block_count = grads_cat.shape[0]
-                state_len = _get(dense_state, "Ql").shape[0]
+                state_len = dense_state.Ql.shape[0]
                 if dense_block_count < state_len:
                     pad = state_len - dense_block_count
                     grads_cat = jnp.concatenate(
@@ -428,18 +428,18 @@ def scale_by_quad(
 
                 diag_left = False
                 diag_right = False
-                valid_shape_dense = jnp.stack([_get(dense_state, "valid_rows"), _get(dense_state, "valid_cols")], axis=1)
+                valid_shape_dense = jnp.stack([dense_state.valid_rows, dense_state.valid_cols], axis=1)
                 if pipeline_axis_name is not None:
                     valid_shape_dense = with_sharding_constraint(valid_shape_dense, PartitionSpec(pipeline_axis_name))
-                    Ql_c = with_sharding_constraint(_get(dense_state, "Ql"), PartitionSpec(pipeline_axis_name))
-                    Qr_c = with_sharding_constraint(_get(dense_state, "Qr"), PartitionSpec(pipeline_axis_name))
-                    Ll_in = with_sharding_constraint(_get(dense_state, "Ll"), PartitionSpec(pipeline_axis_name))
-                    Lr_in = with_sharding_constraint(_get(dense_state, "Lr"), PartitionSpec(pipeline_axis_name))
+                    Ql_c = with_sharding_constraint(dense_state.Ql, PartitionSpec(pipeline_axis_name))
+                    Qr_c = with_sharding_constraint(dense_state.Qr, PartitionSpec(pipeline_axis_name))
+                    Ll_in = with_sharding_constraint(dense_state.Ll, PartitionSpec(pipeline_axis_name))
+                    Lr_in = with_sharding_constraint(dense_state.Lr, PartitionSpec(pipeline_axis_name))
                 else:
-                    Ql_c = _get(dense_state, "Ql")
-                    Qr_c = _get(dense_state, "Qr")
-                    Ll_in = _get(dense_state, "Ll")
-                    Lr_in = _get(dense_state, "Lr")
+                    Ql_c = dense_state.Ql
+                    Qr_c = dense_state.Qr
+                    Ll_in = dense_state.Ll
+                    Lr_in = dense_state.Lr
 
                 Ql_in, Qr_in = jax.lax.cond(balance, lambda p: _balance_qs(p[0], p[1]), lambda p: p, (Ql_c, Qr_c))
                 Ql_new, Qr_new, Ll_new, Lr_new, Pg_cat = vmap(
@@ -485,7 +485,7 @@ def scale_by_quad(
                     ),
                 )
 
-                valid_count = _get(dense_state, "valid_count")
+                valid_count = dense_state.valid_count
                 Pg_cat = Pg_cat[:valid_count]
                 pg_dense_blocks = Pg_cat
 
@@ -499,7 +499,7 @@ def scale_by_quad(
                     nb = B * nr * nc
                     blocks = pg_dense_blocks[start_idx : start_idx + nb]
                     start_idx += nb
-                    rec = _unblock2d(blocks, (nr, nc, m, n), _get(dense_state, "block_size"))
+                    rec = _unblock2d(blocks, (nr, nc, m, n), dense_state.block_size)
                     leaves_u[leaf_idx] = jnp.reshape(rec, leaf.shape)
 
         for leaf_idx, (leaf, st) in enumerate(zip(leaves_u, perleaf_state)):
@@ -723,7 +723,7 @@ def quad(
     max_size_dense: int = 8192,
     preconditioner_lr: float = 0.7,
     preconditioner_init_scale: float = 1.0,
-    preconditioner_update_style: str = "QUAD",
+    preconditioner_update_style: str = "Q0p5EQ1p5",
     dtype: Union[str, jnp.dtype] = jnp.bfloat16,
     scanned_layers: Optional[base.Params] = None,
     block_size: int = 256,
@@ -854,43 +854,48 @@ def get_opt_state_partition_specs(params, **quad_kwargs):
         return (precond_specs, None)
 
 
-def _diag_update(term1: jax.Array, term2: jax.Array, L: jax.Array, Q: jax.Array, lr_precond: jax.Array):
+betaL = 0.95
+
+
+def _diag_update(term1, term2, L, Q, lr_precond):
     ell = jnp.max(term1) + term2
-    L = jnp.maximum(0.95 * L + 0.05 * ell, ell)
+    L = jnp.maximum(betaL * L + (1 - betaL) * ell, ell)
     z = (lr_precond / (2.0 * L)).astype(Q.dtype)
     gain = 1.0 - z * (term1 - term2)
     Qn = Q * (gain * gain)
     return Qn, L
 
 
-# def _diag_update_q0p5eq1p5(term1: jax.Array, term2: jax.Array, L: jax.Array, Q: jax.Array, lr_precond: jax.Array):
-#     ell = jnp.max(term1) + term2
-#     L = jnp.maximum(0.95 * L + 0.05 * ell, ell)
-#     z = (lr_precond / L).astype(Q.dtype)
-#     gain = 1.0 - z * (term1 - term2)
-#     Qn = Q * gain
-#     return Qn, L
-_diag_update_q0p5eq1p5 = _diag_update
+def _diag_update_q0p5eq1p5(term1, term2, L, Q, lr_precond):
+    ell = jnp.max(term1) + term2
+    L = jnp.maximum(betaL * L + (1 - betaL) * ell, ell)
+    z = (lr_precond / L).astype(Q.dtype)
+    gain = 1.0 - z * (term1 - term2)
+    Qn = Q * gain
+    return Qn, L
 
 
-def _norm_lower_bound(A: jax.Array, skh: bool = False) -> jax.Array:
-    """Returns a cheap lower bound for the spectral norm of A."""
+def _norm_lower_bound(key, A, k=4, iters=5, skh=False):
     if skh:
         scale = jnp.max(jnp.abs(A))
     else:
         scale = jnp.max(jnp.diag(A))
     A /= scale
-    j = jnp.argmax(jnp.sum(A * A, axis=1))
-    x = jax.lax.dynamic_index_in_dim(A, j, 0, keepdims=False) @ A
-    for _ in range(2):
-        x = x / jnp.linalg.norm(x)
+    mean_energies = jnp.mean(A * A, axis=1, keepdims=False)
+    j = jnp.argmax(mean_energies)
+    power = jax.lax.dynamic_index_in_dim(mean_energies, j, 0, keepdims=False)
+    max_vec = jax.lax.dynamic_index_in_dim(A, j, 0, keepdims=False)
+    x = (max_vec * jax.lax.rsqrt(power) + jax.random.normal(key, (k, A.shape[1]), A.dtype)) @ A
+    for _ in range(iters):
+        x = x / jnp.max(jnp.abs(x))
         x = x @ A
-    return jnp.linalg.norm((x / jnp.linalg.norm(x)) @ A) * scale
+    x = (x / jnp.linalg.vector_norm(x, axis=1, keepdims=True)) @ A
+    return jnp.max(jnp.linalg.vector_norm(x, axis=1, keepdims=False)) * scale
 
 
-def _dense_update(term1: jax.Array, term2: jax.Array, L: jax.Array, Q: jax.Array, lr_precond: jax.Array):
-    ell = _norm_lower_bound(term1) + term2
-    L = jnp.maximum(0.95 * L + 0.05 * ell, ell)
+def _dense_update(key, term1, term2, L, Q, lr_precond):
+    ell = _norm_lower_bound(key, term1) + term2
+    L = jnp.maximum(betaL * L + (1 - betaL) * ell, ell)
     z = (lr_precond / (2.0 * L)).astype(Q.dtype)
     P = Q - z * (term1 @ Q - term2 * Q)
     P = P - z * (P @ term1 - P * term2)
@@ -898,34 +903,35 @@ def _dense_update(term1: jax.Array, term2: jax.Array, L: jax.Array, Q: jax.Array
     return Qn, L
 
 
-def _dense_update_q0p5eq1p5(term1: jax.Array, term2: jax.Array, L: jax.Array, Q: jax.Array, lr_precond: jax.Array):
-    ell = _norm_lower_bound(term1) + term2
-    L = jnp.maximum(0.95 * L + 0.05 * ell, ell)
+def _dense_update_q0p5eq1p5(key, term1, term2, L, Q, lr_precond):
+    key1, key2 = jax.random.split(key)
+    ell = _norm_lower_bound(key1, term1) + term2
+    L = jnp.maximum(betaL * L + (1 - betaL) * ell, ell)
     z = (lr_precond / L).astype(Q.dtype)
     Q_updated = Q - z * (term1 @ Q - term2 * Q)
-    Qn = _procrustes_step(Q_updated)
+    Qn = _procrustes_step(key2, Q_updated)
     return Qn, L
 
 
-def _procrustes_step(Q: jax.Array, max_step_size: float = 1/8) -> jax.Array:
+def _procrustes_step(key, Q, max_step_size=1/8):
     R = Q.T - Q
     max_abs = jnp.max(jnp.abs(R))
 
-    def update_q(R_local):
-        R_scaled = R_local / max_abs
-        RQ = R_scaled @ Q
+    def inner(R):
+        R = R / max_abs
+        RQ = R @ Q
         tr_RQ = jnp.trace(RQ)
 
-        def do_rotation(R_scaled_local, RQ_local, tr_RQ_local):
-            a = max_step_size / _norm_lower_bound(R_scaled_local, skh=True)
-            RRQ = R_scaled_local @ RQ_local
+        def do_rotation():
+            a = max_step_size / _norm_lower_bound(key, R, skh=True)
+            RRQ = R @ RQ
             tr_RRQ = jnp.trace(RRQ)
-            a = jnp.where(tr_RRQ < 0, jnp.minimum(a, -tr_RQ_local / tr_RRQ), a)
-            return Q + a * (RQ_local + 0.5 * a * RRQ)
+            a = jnp.where(tr_RRQ < 0, jnp.minimum(a, -tr_RQ / tr_RRQ), a)
+            return Q + a * (RQ + 0.5 * a * RRQ)
 
-        return jax.lax.cond(tr_RQ > 0, lambda: do_rotation(R_scaled, RQ, tr_RQ), lambda: Q)
+        return jax.lax.cond(tr_RQ > 0, do_rotation, lambda: Q)
 
-    return jax.lax.cond(max_abs > jnp.finfo(Q.dtype).tiny, lambda: update_q(R), lambda: Q)
+    return jax.lax.cond(max_abs > jnp.finfo(Q.dtype).tiny, lambda: inner(R), lambda: Q)
 
 
 def _preconditioning(
@@ -935,16 +941,17 @@ def _preconditioning(
     Ll: jax.Array,
     Lr: jax.Array,
     G: jax.Array,
-    valid_shape: Tuple[int, int],
+    valid_shape: jax.Array,
     diag_left: bool,
     diag_right: bool,
     lr_precond: jax.Array,
     noise_scale: float,
     diag_update_fn: Callable,
     dense_update_fn: Callable,
-) -> Tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+):
+    key1, key2 = jax.random.split(key)
     m, n = valid_shape[0], valid_shape[1]
-    noise = jax.random.normal(key, G.shape, G.dtype) * noise_scale
+    noise = jax.random.normal(key2, G.shape, G.dtype) * noise_scale
     rows = jnp.arange(G.shape[0], dtype=jnp.int32) < m
     cols = jnp.arange(G.shape[1], dtype=jnp.int32) < n
     mask = rows[:, None] & cols[None, :]
@@ -956,13 +963,14 @@ def _preconditioning(
         # DD
         Pg = jax.numpy.linalg.multi_dot([Ql.T, Ql, Gn, Qr.T, Qr])
 
+        key3, key4 = jax.random.split(key1)
         term1L = Pg @ Pg.T
         term2L = total_numel / m
-        Ql_new, Ll_new = dense_update_fn(term1L, term2L, Ll, Ql, lr_precond)
+        Ql_new, Ll_new = dense_update_fn(key3, term1L, term2L, Ll, Ql, lr_precond)
 
         term1R = Pg.T @ Pg
         term2R = total_numel / n
-        Qr_new, Lr_new = dense_update_fn(term1R, term2R, Lr, Qr, lr_precond)
+        Qr_new, Lr_new = dense_update_fn(key4, term1R, term2R, Lr, Qr, lr_precond)
 
         Pg_out = jax.numpy.linalg.multi_dot([Ql_new.T, Ql_new, G, Qr_new.T, Qr_new])
 
@@ -976,7 +984,7 @@ def _preconditioning(
 
         term1R = Pg.T @ Pg
         term2R = total_numel / n
-        Qr_new, Lr_new = dense_update_fn(term1R, term2R, Lr, Qr, lr_precond)
+        Qr_new, Lr_new = dense_update_fn(key1, term1R, term2R, Lr, Qr, lr_precond)
 
         Pg_out = (Ql_new * Ql_new)[:, None] * jax.numpy.linalg.multi_dot([G, Qr_new.T, Qr_new])
 
@@ -986,7 +994,7 @@ def _preconditioning(
 
         term1L = Pg @ Pg.T
         term2L = total_numel / m
-        Ql_new, Ll_new = dense_update_fn(term1L, term2L, Ll, Ql, lr_precond)
+        Ql_new, Ll_new = dense_update_fn(key1, term1L, term2L, Ll, Ql, lr_precond)
 
         term1R = jnp.sum(Pg * Pg, axis=0)
         term2R = total_numel / n
@@ -1011,9 +1019,7 @@ def _preconditioning(
     return Ql_new, Qr_new, Ll_new, Lr_new, Pg_out
 
 
-def _preconditioning_one_d(
-    key: jax.Array, Q: jax.Array, L: jax.Array, G: jax.Array, lr_precond: jax.Array, noise_scale: float, diag_update_fn: Callable
-) -> Tuple[jax.Array, jax.Array, jax.Array]:
+def _preconditioning_one_d(key, Q, L, G, lr_precond, noise_scale, diag_update_fn):
     noise = jax.random.normal(key, G.shape, G.dtype) * noise_scale
     Gn = G + noise
     Pg = Q * Q * Gn
@@ -1024,9 +1030,9 @@ def _preconditioning_one_d(
     return Qn, Ln, Pg_out
 
 
-def _balance_qs(Ql: jax.Array, Qr: jax.Array) -> Tuple[jax.Array, jax.Array]:
+def _balance_qs(Ql, Qr):
     @vmap
-    def _balance_sample(ql: jax.Array, qr: jax.Array) -> Tuple[jax.Array, jax.Array]:
+    def _balance_sample(ql, qr):
         nl = jnp.max(jnp.abs(ql))
         nr = jnp.max(jnp.abs(qr))
         geometric_mean = jnp.sqrt(nl * nr)
@@ -1037,7 +1043,7 @@ def _balance_qs(Ql: jax.Array, Qr: jax.Array) -> Tuple[jax.Array, jax.Array]:
     return _balance_sample(Ql, Qr)
 
 
-def _block2d(x: jax.Array, block_size: int) -> Tuple[jax.Array, Tuple[int, int, int, int]]:
+def _block2d(x, block_size):
     """Block each [m, n] in a [B, m, n] tensor to blocks of [bs, bs].
 
     Returns blocks with shape [B * nr * nc, bs, bs] and meta (nr, nc, m, n).
@@ -1052,7 +1058,7 @@ def _block2d(x: jax.Array, block_size: int) -> Tuple[jax.Array, Tuple[int, int, 
     return blocks, (nr, nc, m, n)
 
 
-def _unblock2d(blocks: jax.Array, meta: Tuple[int, int, int, int], block_size: int) -> jax.Array:
+def _unblock2d(blocks, meta, block_size):
     """Inverse of _block2d_full_batched.
 
     Input blocks: [B * nr * nc, bs, bs] -> output: [B, m, n].
@@ -1065,7 +1071,7 @@ def _unblock2d(blocks: jax.Array, meta: Tuple[int, int, int, int], block_size: i
     return x[:, :m, :n]
 
 
-def _block_rows(x: jax.Array, block_size: int) -> Tuple[jax.Array, Tuple[int, int, int]]:
+def _block_rows(x, block_size):
     """Block rows for each [m, n] in [B, m, n]. Returns [B * nr, bs, n] and meta (nr, m, n)."""
     B, m, n = x.shape
     nr = (m + block_size - 1) // block_size
@@ -1077,7 +1083,7 @@ def _block_rows(x: jax.Array, block_size: int) -> Tuple[jax.Array, Tuple[int, in
     return blocks, (nr, m, n)
 
 
-def _unblock_rows(blocks: jax.Array, meta: Tuple[int, int, int], block_size: int, B: int) -> jax.Array:
+def _unblock_rows(blocks, meta, block_size, B):
     """Inverse of _block_rows_batched. Blocks: [B * nr, bs, n] -> [B, m, n]."""
     nr, m, n = meta
     x3 = blocks.reshape(B, nr, block_size, n)
@@ -1085,7 +1091,7 @@ def _unblock_rows(blocks: jax.Array, meta: Tuple[int, int, int], block_size: int
     return x[:, :m, :n]
 
 
-def _block_cols(x: jax.Array, block_size: int) -> Tuple[jax.Array, Tuple[int, int, int]]:
+def _block_cols(x, block_size):
     """Block columns for each [m, n] in [B, m, n]. Returns [B * nc, m, bs] and meta (nc, m, n)."""
     B, m, n = x.shape
     nc = (n + block_size - 1) // block_size
@@ -1097,7 +1103,7 @@ def _block_cols(x: jax.Array, block_size: int) -> Tuple[jax.Array, Tuple[int, in
     return blocks, (nc, m, n)
 
 
-def _unblock_cols(blocks: jax.Array, meta: Tuple[int, int, int], block_size: int, B: int) -> jax.Array:
+def _unblock_cols(blocks, meta, block_size, B):
     """Inverse of _block_cols_batched. Blocks: [B * nc, m, bs] -> [B, m, n]."""
     nc, m, n = meta
     x4 = blocks.reshape(B, nc, m, block_size).transpose(0, 2, 1, 3)
@@ -1105,13 +1111,7 @@ def _unblock_cols(blocks: jax.Array, meta: Tuple[int, int, int], block_size: int
     return x[:, :, :n]
 
 
-def _get(d, k, default=None):
-    if not isinstance(d, dict):
-        return getattr(d, k, default)
-    return d.get(k, default)
-
-
-def _merge_dims(shape: Tuple[int, ...]) -> Tuple[int, ...]:
+def _merge_dims(shape):
     if len(shape) < 2:
         return shape
     if np.prod(shape) == np.max(shape):  # 1d-like
@@ -1128,7 +1128,7 @@ def _merge_dims(shape: Tuple[int, ...]) -> Tuple[int, ...]:
     return (np.prod(dims[:best_split]), np.prod(dims[best_split:]))
 
 
-def _identity_padded(block_size: int, valid: int, dtype: jnp.dtype) -> jax.Array:
+def _identity_padded(block_size, valid, dtype):
     if valid >= block_size:
         return jnp.eye(block_size, dtype=dtype)
     eye = jnp.eye(valid, dtype=dtype)
